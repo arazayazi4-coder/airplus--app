@@ -584,7 +584,7 @@ async function submitForm(){
    logActivity(`ثبت ${E.one} ${extra.code||''}`.trim());
   }
   $('#dlg').close();cur=null;toast('ذخیره شد');render();
- }catch(e){$('#err').textContent='ذخیره ناموفق بود؛ دوباره تلاش کنید.';if(btn)btn.disabled=false}
+ }catch(e){$('#err').textContent='ذخیره ناموفق بود: '+((e&&(e.code||e.message))||e);if(btn)btn.disabled=false}
 }
 async function del(key,id){
  if(!guardEdit())return;
@@ -593,7 +593,8 @@ async function del(key,id){
  if(key==='batches'&&state.sales.some(s=>s.batchCode===r.code))return toast('برای این بچ فروش ثبت شده؛ اول فروش‌ها را حذف کنید.');
  if(key==='buyers'&&state.sales.some(s=>s.buyerId===r.id))return toast('برای این خریدار فروش ثبت شده است.');
  if(!confirm('این مورد حذف شود؟'))return;
- await delDoc(key,id);logActivity(`حذف ${ENT[key].one} ${r.code||r.name||''}`.trim());render();toast('حذف شد');
+ try{await delDoc(key,id);logActivity(`حذف ${ENT[key].one} ${r.code||r.name||''}`.trim());render();toast('حذف شد')}
+ catch(e){toast('حذف ناموفق بود: '+((e&&(e.code||e.message))||e))}
 }
 
 /* ======== نمونه، پشتیبان، درون‌ریزی ======== */
