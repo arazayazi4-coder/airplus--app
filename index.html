@@ -131,6 +131,8 @@ dialog::backdrop{background:rgba(15,25,35,.5)}
  .split{grid-template-columns:1fr}
  .db{grid-template-columns:1fr}
 }
+th .flt{display:block;width:100%;min-width:64px;margin-top:5px;padding:3px 6px;font-size:12px;font-weight:400;border:1px solid #BAC3CC;border-radius:4px;background:#fff;color:var(--ink)}
+.fbar{min-height:8px;font-size:12.5px;margin:0 0 6px}
 @media print{
  body *{visibility:hidden}
  #dlg,#dlg *{visibility:visible}
@@ -210,7 +212,7 @@ function defaultSettings(){return{count:3,names:['','',''],
  materials:[{id:'m1',name:'شفت توپر ۷۰۰۰ - Ø45',od:45,idm:0,density:2.8,unit:'kg'},{id:'m2',name:'لوله ۶۰۰۰ - Ø60/Ø30',od:60,idm:30,density:2.7,unit:'kg'}],
  products:[{id:'p1',name:'شاتون',materialId:'m1',length:120,waste:3},{id:'p2',name:'سیلندر تیپ ۱',materialId:'m2',length:100,waste:3},{id:'p3',name:'سیلندر تیپ ۲',materialId:'m2',length:80,waste:3}],
  company:{name:'ایرپلاس پنوماتیک',address:'',phone:'',eco:'',bank:'',note:''}}}
-function defaultsState(){return{settings:defaultSettings(),purchases:[],batches:[],sales:[],buyers:[],activity:[],members:[],roles:{},counters:{p:0,t:0}}}
+function defaultsState(){return{settings:defaultSettings(),purchases:[],batches:[],sales:[],buyers:[],activity:[],members:[],roles:{},ledger:[],stockout:[],counters:{p:0,t:0}}}
 let state=defaultsState();
 const S=()=>state.settings;
 const localUid=()=>'i'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -290,18 +292,74 @@ const prodName=id=>(prod(id)||{}).name||'—';
 const unitWeight=p=>{const m=mat(p.materialId);return Math.PI/4*(m.od**2-m.idm**2)*p.length*m.density/1e6};
 const pCalc=p=>{const mt=p.kg*p.price,total=mt+(p.transport||0);return{mt,total,perKg:p.kg>0?total/p.kg:0}};
 const weightOf=b=>{const p=prod(b.productId);if(!p)return 0;return b.actualKg>0?b.actualKg:b.qty*unitWeight(p)*(1+(p.waste||0)/100)};
-const COSTS=[['machining','ماشینکاری / تراشکاری'],['bearing','بلبرینگ'],['screw','پیچ'],['anodize','انادایز'],['polish','ویبره و پولیش'],['laser','لیزر']];
-function bCalc(b){const part=state.purchases.find(x=>x.code===b.partCode);const w=weightOf(b);const perKg=part?pCalc(part).perKg:0;const matCost=w*perKg;const proc=COSTS.reduce((a,[k])=>a+(b[k]||0),0);const unitMat=b.qty>0?matCost/b.qty:0;const rawUnit=unitMat+proc;const scrap=Math.min(Math.max(b.scrap||0,0),b.qty);const usable=b.qty-scrap;const total=rawUnit*b.qty;const unit=usable>0?total/usable:0;const sold=state.sales.filter(s=>s.batchCode===b.code).reduce((a,s)=>a+s.qty,0);const stock=usable-sold;return{w,perKg,matCost,proc,unitMat,rawUnit,unit,scrap,usable,total,procTotal:proc*b.qty,sold,stock,stockVal:stock*unit}}
-function sCalc(s){const b=state.batches.find(x=>x.code===s.batchCode);const unit=b?bCalc(b).unit:0;const total=s.qty*s.price,cogs=s.qty*unit;return{b,unit,total,cogs,profit:total-cogs,margin:total?(total-cogs)/total:0}}
-const usedKg=(code,except)=>state.batches.filter(b=>b.partCode===code&&b.id!==except).reduce((a,b)=>a+weightOf(b),0);
+const COSTS=[['machining','ماشینکاری / تراشکاری'],['bearing','بلبرینگ'],['screw','پیچ'],['anodize','انادایز'],['polish','ویبره و پولیش'],['laser','لیزر'],['other','سایر اقلام (ورق، پکینگ، واشر و…)']];
+const CASHLESS=new Set(['bearing','screw','other']);
+function bCalc(b){const part=state.purchases.find(x=>x.code===b.partCode);const w=weightOf(b);const perKg=part?pCalc(part).perKg:0;const matCost=w*perKg;const proc=COSTS.reduce((a,[k])=>a+(b[k]||0),0);const unitMat=b.qty>0?matCost/b.qty:0;const rawUnit=unitMat+proc;const scrap=Math.min(Math.max(b.scrap||0,0),b.qty);const usable=b.qty-scrap;const total=rawUnit*b.qty;const unit=usable>0?total/usable:0;const sold=state.sales.filter(s=>s.batchCode===b.code).reduce((a,s)=>a+s.qty,0);const stock=usable-sold;const procCash=COSTS.filter(([k])=>!CASHLESS.has(k)).reduce((a,[k])=>a+(b[k]||0),0);return{w,perKg,matCost,proc,procCash,unitMat,rawUnit,unit,scrap,usable,total,procTotal:proc*b.qty,procCashTotal:procCash*b.qty,sold,stock,stockVal:stock*unit}}
+const EXCL_FIELDS=[['bearing','بلبرینگ'],['screw','پیچ'],['other','سایر اقلام']];
+function defaultTypes(p){
+ if(p.id==='p1')return[{id:'p1-asm',name:'شاتون مونتاژ شده (با بلبرینگ و پیچ)',excl:[]},{id:'p1-raw',name:'شاتون خام (بدون بلبرینگ و پیچ)',excl:['bearing','screw']}];
+ return[{id:p.id+'-std',name:'استاندارد',excl:[]}];
+}
+const typesOf=pid=>{const p=prod(pid);if(!p)return[];return(p.types&&p.types.length)?p.types:defaultTypes(p)};
+const saleType=(pid,tid)=>typesOf(pid).find(t=>t.id===tid)||null;
+function unitFor(b,c,excl){
+ if(!c.usable)return 0;
+ let sub=0;for(const k of(excl||[]))sub+=(b[k]||0)*b.qty/c.usable;
+ return Math.max(0,c.unit-sub);
+}
+function sCalc(s){
+ const b=state.batches.find(x=>x.code===s.batchCode);
+ const c=b?bCalc(b):null;
+ const t=b?saleType(b.productId,s.typeId):null;
+ const unit=c?unitFor(b,c,t&&t.excl):0;
+ const total=s.qty*s.price,cogs=s.qty*unit;
+ return{b,unit,total,cogs,profit:total-cogs,margin:total?(total-cogs)/total:0,typeName:t?t.name:''};
+}
+const usedKg=(code,except)=>state.batches.filter(b=>b.partCode===code&&b.id!==except).reduce((a,b)=>a+weightOf(b),0)+state.stockout.filter(x=>x.partCode===code).reduce((a,x)=>a+(+x.qty||0),0);
 const buyer=id=>state.buyers.find(b=>b.id===id);
+const nSh=()=>Math.max(1,Math.round(num(S().count))||1);
+const shName=i=>(S().names&&S().names[i])||`سهامدار ${faDigits(+i+1)}`;
+const ledgerSum=pred=>state.ledger.filter(pred).reduce((a,x)=>a+(+x.amount||0),0);
+function settlements(){return state.ledger.filter(x=>x.kind==='settlement').sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||0)-(b.createdAt||0))}
+function lastSettleDate(){const l=settlements();return l.length?l[l.length-1].date:''}
 function totals(){
  const purch=state.purchases.reduce((a,p)=>a+pCalc(p).total,0);
  const sales=state.sales.reduce((a,s)=>a+s.qty*s.price,0);
  const proc=state.batches.reduce((a,b)=>a+bCalc(b).procTotal,0);
+ const procCash=state.batches.reduce((a,b)=>a+bCalc(b).procCashTotal,0);
  const stockVal=state.batches.reduce((a,b)=>a+bCalc(b).stockVal,0);
  const profit=state.sales.reduce((a,s)=>a+sCalc(s).profit,0);
- return{purch,sales,cash:sales-purch,proc,cash2:sales-purch-proc,stockVal,profit}}
+ const capital=ledgerSum(x=>x.kind==='capital');
+ const withdrawn=ledgerSum(x=>x.kind==='withdraw'||x.kind==='settle');
+ const rawVal=state.purchases.reduce((a,p)=>{const rem=p.kg-usedKg(p.code);return a+(rem>0?rem*pCalc(p).perKg:0)},0);
+ return{purch,sales,proc,procCash,capital,withdrawn,cash:capital+sales-purch-procCash-withdrawn,stockVal,rawVal,profit}}
+function partnerStats(){
+ const n=nSh();const t=totals();const ls=lastSettleDate();
+ const periodProfit=state.sales.filter(s=>!ls||(s.date||'')>ls).reduce((a,s)=>a+sCalc(s).profit,0);
+ const rows=[];
+ for(let i=0;i<n;i++){
+  const capital=ledgerSum(x=>x.kind==='capital'&&String(x.sh)===String(i));
+  const withdraw=ledgerSum(x=>(x.kind==='withdraw'||x.kind==='settle')&&String(x.sh)===String(i));
+  const share=t.profit/n;const remainProfit=share-withdraw;
+  rows.push({i,name:shName(i),capital,share,withdraw,remainProfit,balance:capital+remainProfit,periodShare:periodProfit/n});
+ }
+ return{rows,n,periodProfit,lastSettle:ls};
+}
+function settlePreview(D){
+ const n=nSh();
+ const profitTo=state.sales.filter(s=>(s.date||'')<=D).reduce((a,s)=>a+sCalc(s).profit,0);
+ const out=[];
+ for(let i=0;i<n;i++){
+  const share=profitTo/n;
+  const wd=ledgerSum(x=>(x.kind==='withdraw'||x.kind==='settle')&&String(x.sh)===String(i)&&(x.date||'')<=D);
+  const claim=share-wd;
+  out.push({i,name:shName(i),share,wd,claim,pay:Math.max(0,Math.round(claim))});
+ }
+ return{profitTo,rows:out,total:out.reduce((a,r)=>a+r.pay,0)};
+}
+function rawStockRows(){
+ return state.purchases.map(p=>{const c=pCalc(p);const usedB=state.batches.filter(b=>b.partCode===p.code).reduce((a,b)=>a+weightOf(b),0);const outM=state.stockout.filter(x=>x.partCode===p.code).reduce((a,x)=>a+(+x.qty||0),0);const rem=p.kg-usedB-outM;return{r:p,c:{...c,usedB,outM,rem,val:Math.max(0,rem)*c.perKg,u:unitOf(p.materialId)}}});
+}
 
 function fmt(kind,v){
  if(v===''||v==null)return'<span class="mut">—</span>';
@@ -314,7 +372,7 @@ function fmt(kind,v){
   default:return esc(v)}}
 
 /* ======== دسترسی‌ها ======== */
-const TAB_LABEL={purchases:'خرید متریال',batches:'تولید',sales:'فروش',buyers:'خریداران',invoice:'فاکتور',cost:'بهای تمام‌شده',activity:'لاگ تغییرات',settings:'تنظیمات'};
+const TAB_LABEL={purchases:'خرید متریال',batches:'تولید',sales:'فروش',buyers:'خریداران',warehouse:'انبار',partners:'صندوق و سهامداران',invoice:'فاکتور',cost:'بهای تمام‌شده',activity:'لاگ تغییرات',settings:'تنظیمات'};
 function myRole(){
  if(!isOnline())return{level:'admin',tabs:null};
  const r=state.roles[CUR.id];
@@ -327,6 +385,91 @@ function canEditData(){return myRole().level!=='limited'}
 function isAdmin(){return isOnline()&&myRole().level==='admin'}
 function guardEdit(){if(!canEditData()){toast('سطح دسترسی شما فقط مشاهده است.');return false}return true}
 
+/* ======== جدول‌ها و فیلتر ستون‌ها ======== */
+const FLT={};const TBL={};
+const NUMK=['int','money','kg','pct'];
+const colRaw=(col,r,c)=>col.fv?col.fv(r,c):col.v(r,c);
+const isNumCol=col=>!!col.nk||NUMK.includes(col.k);
+function cmpOp(op,a,b){switch(op){case'>':return a>b;case'<':return a<b;case'>=':return a>=b;case'<=':return a<=b;default:return a===b}}
+function matchFilter(col,raw,q,mode){
+ if(mode==='eq')return String(raw??'')===q;
+ q=String(q).trim();if(!q)return true;
+ const m=q.match(/^(>=|<=|>|<|=)\s*(.*)$/);
+ if(m){
+  const op=m[1],rhs=latin(m[2]).trim();if(!rhs)return true;
+  if(isNumCol(col)){let a=Number(raw);if(col.k==='pct')a*=100;const b=parseFloat(rhs.replace(/[,،٬]/g,''));if(isNaN(b))return true;if(raw===''||raw==null||isNaN(a))return false;return cmpOp(op,a,b)}
+  const a=latin(String(raw??''));const b=col.k==='date'?(normDate(rhs)||rhs):rhs;
+  if(!a)return false;
+  return op==='='?a===b:cmpOp(op,a,b);
+ }
+ let qq=latin(q).toLowerCase();if(isNumCol(col))qq=qq.replace(/[,،٬]/g,'');
+ return latin(String(raw??'')).toLowerCase().includes(qq);
+}
+function colSpec(col,all){
+ if(col.nofilter)return null;
+ if(!col.txt&&!isNumCol(col)&&col.k!=='date'){
+  const vals=[...new Set(all.map(x=>{const v=colRaw(col,x.r,x.c);return v==null?'':String(v)}).filter(t=>t!==''))];
+  if(vals.length>=2&&vals.length<=15)return{type:'select',opts:vals.sort((a,b)=>a.localeCompare(b,'fa'))};
+ }
+ return{type:'text'};
+}
+function filterInput(id,col,i,spec){
+ if(!spec)return'';
+ const curv=(FLT[id]||{})[i]||'';
+ if(spec.type==='select'){
+  const opts=(!curv||spec.opts.includes(curv))?spec.opts:[...spec.opts,curv];
+  return`<select class="flt" data-tid="${id}" data-col="${i}"><option value="">همه</option>${opts.map(o=>`<option value="${esc(o)}"${o===curv?' selected':''}>${esc(o)}</option>`).join('')}</select>`;
+ }
+ return`<input class="flt" data-tid="${id}" data-col="${i}" value="${esc(curv)}" placeholder="فیلتر" autocomplete="off">`;
+}
+const hasFilter=id=>Object.keys(FLT[id]||{}).some(k=>String(FLT[id][k]).trim()!=='');
+function filteredRows(id){
+ const d=TBL[id];const f=FLT[id]||{};const all=d.rows();
+ const act=Object.keys(f).filter(k=>String(f[k]).trim()!=='');
+ if(!act.length)return{all,rows:all};
+ const rows=all.filter(({r,c})=>act.every(k=>{const col=d.cols[k];if(!col)return true;const sp=d.spec[k];return matchFilter(col,colRaw(col,r,c),f[k],sp&&sp.type==='select'?'eq':'text')}));
+ return{all,rows};
+}
+function bodyHTML(id){
+ const d=TBL[id];const{rows}=filteredRows(id);
+ if(!rows.length)return`<tr><td colspan="${d.cols.length+(d.actions?1:0)}" class="empty">${hasFilter(id)?'موردی با این فیلتر پیدا نشد.':(d.emptyMsg||'موردی ثبت نشده است.')}</td></tr>`;
+ return rows.map(({r,c})=>`<tr>${d.cols.map(col=>`<td class="${col.n?'n':''}">${fmt(col.k||'text',col.v(r,c))}</td>`).join('')}${d.actions?`<td>${d.actions(r,c)}</td>`:''}</tr>`).join('');
+}
+function footHTML(id){
+ const d=TBL[id];if(!d.foot)return'';const{rows}=filteredRows(id);if(!rows.length)return'';
+ const f=d.foot(rows);
+ return`<tr>${d.cols.map((c,i)=>`<td class="${c.n?'n':''}">${i===0?'جمع':(i in f?fmt(d.footKinds[i],f[i]):'')}</td>`).join('')}${d.actions?'<td></td>':''}</tr>`;
+}
+function fbarHTML(id){
+ if(!hasFilter(id))return'';
+ const{all,rows}=filteredRows(id);
+ return`نمایش ${fa.format(rows.length)} از ${fa.format(all.length)} · <button class="btn sm" data-act="clrf" data-tid="${id}">پاک کردن فیلترها</button>`;
+}
+function refreshTable(id){
+ const tb=document.getElementById('tb-'+id);if(!tb||!TBL[id])return;
+ tb.innerHTML=bodyHTML(id);const tf=document.getElementById('tf-'+id);if(tf)tf.innerHTML=footHTML(id);
+ const fb=document.getElementById('fb-'+id);if(fb)fb.innerHTML=fbarHTML(id);
+}
+function tableHTML(id,def){
+ TBL[id]=def;FLT[id]=FLT[id]||{};
+ const all=def.rows();
+ def.spec=def.cols.map(col=>colSpec(col,all));
+ const head=def.cols.map((col,i)=>`<th class="${col.n?'n':''}">${col.h}${filterInput(id,col,i,def.spec[i])}</th>`).join('');
+ return`<div class="fbar mut" id="fb-${id}">${fbarHTML(id)}</div><div class="wrap"><table><thead><tr>${head}${def.actions?'<th></th>':''}</tr></thead><tbody id="tb-${id}">${bodyHTML(id)}</tbody><tfoot id="tf-${id}">${footHTML(id)}</tfoot></table></div>`;
+}
+const filterHelp=()=>`<p class="mut" style="margin:0 0 8px;font-size:12px">زیر عنوان هر ستون می‌توانید فیلتر بگذارید. در ستون‌های عددی و تاریخ از &gt; ، &lt; ، &gt;= ، &lt;= ، = هم می‌شود استفاده کرد (مثلاً &gt;100 یا &gt;=1405/06/01). جمع پایین جدول فقط روی ردیف‌های فیلترشده حساب می‌شود.</p>`;
+function entTable(key,opt){
+ opt=opt||{};const E=ENT[key];const editable=canEditData();
+ const acts=opt.actions!==undefined?opt.actions:(editable?(r)=>`<button class="btn sm" data-act="edit" data-key="${key}" data-id="${r.id}">ویرایش</button> <button class="btn sm del" data-act="del" data-key="${key}" data-id="${r.id}">حذف</button>`:null);
+ return tableHTML(opt.id||key,{cols:E.cols,rows:()=>{const rows=state[key].filter(opt.pred||(()=>true)).map(r=>({r,c:E.calc?E.calc(r):{}}));if(key!=='buyers')rows.sort((a,b)=>(b.r.date||'').localeCompare(a.r.date||'')||(b.r.createdAt||0)-(a.r.createdAt||0));return rows},foot:E.foot,footKinds:E.footKinds,emptyMsg:opt.emptyMsg||`هنوز ${E.one}ی ثبت نشده است.`,actions:acts});
+}
+function exportTable(id){
+ const d=TBL[id];if(!d)return;const{rows}=filteredRows(id);
+ const lines=[d.cols.map(c=>csvCell(c.h)).join(',')];
+ for(const{r,c}of rows)lines.push(d.cols.map(col=>csvCell(col.v(r,c))).join(','));
+ saveFile(`${id}.csv`,'\ufeff'+lines.join('\r\n'),'text/csv;charset=utf-8');
+}
+
 /* ======== تعریف موجودیت‌ها ======== */
 const opt=(v,l)=>({v,l});
 const ENT={
@@ -334,14 +477,14 @@ const ENT={
   calc:pCalc,
   cols:[
    {h:'کد پارت',v:r=>r.code},{h:'تاریخ',v:r=>r.date,k:'date'},{h:'متریال',v:r=>mat(r.materialId).name},{h:'تأمین‌کننده',v:r=>r.supplier},
-   {h:'مقدار',v:r=>(unitOf(r.materialId)==='count'?fa.format(r.kg):fa2.format(r.kg))+' '+(unitOf(r.materialId)==='count'?'عدد':'kg'),n:1},
-   {h:'قیمت هر واحد',v:r=>fa.format(Math.round(r.price))+' / '+(unitOf(r.materialId)==='count'?'عدد':'kg'),n:1},
+   {h:'مقدار',v:r=>(unitOf(r.materialId)==='count'?fa.format(r.kg):fa2.format(r.kg))+' '+(unitOf(r.materialId)==='count'?'عدد':'kg'),fv:r=>r.kg,nk:1,n:1},
+   {h:'قیمت هر واحد',v:r=>fa.format(Math.round(r.price))+' / '+(unitOf(r.materialId)==='count'?'عدد':'kg'),fv:r=>r.price,nk:1,n:1},
    {h:'هزینه حمل',v:r=>r.transport||0,k:'money',n:1},
    {h:'هزینه کل پارت',v:(r,c)=>c.total,k:'money',n:1},
-   {h:'قیمت تمام‌شده هر واحد',v:(r,c)=>fa.format(Math.round(c.perKg))+' / '+(unitOf(r.materialId)==='count'?'عدد':'kg'),n:1},
-   {h:'مصرف‌شده',v:r=>(unitOf(r.materialId)==='count'?fa.format(usedKg(r.code)):fa2.format(usedKg(r.code)))+' '+(unitOf(r.materialId)==='count'?'عدد':'kg'),n:1},
-   {h:'مانده',v:r=>(unitOf(r.materialId)==='count'?fa.format(r.kg-usedKg(r.code)):fa2.format(r.kg-usedKg(r.code)))+' '+(unitOf(r.materialId)==='count'?'عدد':'kg'),n:1}],
-  foot:(rows)=>({7:rows.reduce((a,x)=>a+x.c.total,0)}),footKinds:{7:'money'},
+   {h:'قیمت تمام‌شده هر واحد',v:(r,c)=>fa.format(Math.round(c.perKg))+' / '+(unitOf(r.materialId)==='count'?'عدد':'kg'),fv:(r,c)=>c.perKg,nk:1,n:1},
+   {h:'مصرف‌شده',v:r=>(unitOf(r.materialId)==='count'?fa.format(usedKg(r.code)):fa2.format(usedKg(r.code)))+' '+(unitOf(r.materialId)==='count'?'عدد':'kg'),fv:r=>usedKg(r.code),nk:1,n:1},
+   {h:'مانده',v:r=>(unitOf(r.materialId)==='count'?fa.format(r.kg-usedKg(r.code)):fa2.format(r.kg-usedKg(r.code)))+' '+(unitOf(r.materialId)==='count'?'عدد':'kg'),fv:r=>r.kg-usedKg(r.code),nk:1,n:1}],
+  foot:(rows)=>{const same=rows.length>0&&rows.every(x=>x.r.materialId===rows[0].r.materialId);const cnt=same&&unitOf(rows[0].r.materialId)==='count';const f2=cnt?fa.format:fa2.format;const ul=cnt?'عدد':'kg';const q=rows.reduce((a,x)=>a+x.r.kg,0),used=rows.reduce((a,x)=>a+usedKg(x.r.code),0);const o={6:rows.reduce((a,x)=>a+(x.r.transport||0),0),7:rows.reduce((a,x)=>a+x.c.total,0)};if(same){o[4]=f2(q)+' '+ul;o[9]=f2(used)+' '+ul;o[10]=f2(q-used)+' '+ul}return o},footKinds:{4:'text',6:'money',7:'money',9:'text',10:'text'},
   fields:()=>[
    {k:'date',l:'تاریخ خرید',t:'date',req:1,hint:'شمسی، مثل ۱۴۰۵/۰۶/۱۵'},
    {k:'materialId',l:'نوع متریال / کالا',t:'select',opts:()=>S().materials.map(m=>opt(m.id,m.name))},
@@ -365,33 +508,34 @@ const ENT={
   fields:()=>[
    {k:'date',l:'تاریخ تولید',t:'date',req:1},
    {k:'productId',l:'محصول',t:'select',opts:()=>S().products.map(p=>opt(p.id,p.name))},
-   {k:'partCode',l:'از کدام پارت متریال؟',t:'select',wide:1,opts:()=>state.purchases.length?state.purchases.map(p=>{const u=unitOf(p.materialId)==='count'?'عدد':'kg';const rem=u==='عدد'?fa.format(p.kg-usedKg(p.code)):fa2.format(p.kg-usedKg(p.code));return opt(p.code,`${p.code} · ${faDigits(p.date)} · ${mat(p.materialId).name} · مانده ${rem} ${u}`)}):[opt('','ابتدا یک خرید متریال ثبت کنید')]},
+   {k:'partCode',l:'از کدام پارت متریال؟',t:'select',wide:1,opts:()=>state.purchases.some(p=>unitOf(p.materialId)==='kg')?state.purchases.filter(p=>unitOf(p.materialId)==='kg').map(p=>opt(p.code,`${p.code} · ${faDigits(p.date)} · ${mat(p.materialId).name} · مانده ${fa2.format(p.kg-usedKg(p.code))} kg`)):[opt('','ابتدا خرید متریالِ کیلویی (شفت/لوله) ثبت کنید')]},
    {k:'qty',l:'تعداد تولید',t:'num',req:1},
    {k:'scrap',l:'تعداد ضایعات (قطعات مردود، غیرقابل فروش)',t:'num',hint:'اختیاری؛ اگر خالی باشد صفر در نظر گرفته می‌شود. هزینه همان قطعات هم روی قیمت تمام‌شده قطعات سالم پخش می‌شود.'},
    {k:'actualKg',l:'وزن واقعی مصرفی (kg) - اختیاری',t:'num',hint:'اگر خالی باشد از طول برش و ضایعات تنظیمات محاسبه می‌شود'},
-   ...COSTS.map(([k,l])=>({k,l:l+' (هر قطعه)',t:'num'})),
+   ...COSTS.map(([k,l])=>({k,l:l+' (هر قطعه)',t:'num',hint:CASHLESS.has(k)?'هزینه‌ی خرید این اقلام در «خرید متریال» از صندوق کم می‌شود؛ اینجا فقط سهم هر قطعه را برای قیمت تمام‌شده بنویسید.':''})),
   ],
-  blank:()=>({date:todayJ(),productId:S().products[0].id,partCode:(state.purchases.slice(-1)[0]||{}).code||'',qty:'',scrap:'',actualKg:'',machining:'',bearing:'',screw:'',anodize:'',polish:'',laser:''}),
+  blank:()=>({date:todayJ(),productId:S().products[0].id,partCode:(state.purchases.slice(-1)[0]||{}).code||'',qty:'',scrap:'',actualKg:'',machining:'',bearing:'',screw:'',other:'',anodize:'',polish:'',laser:''}),
   preview:(v,row)=>{const b={...v,id:row?row.id:'tmp',code:row?row.code:'—'};const c=bCalc(b);const part=state.purchases.find(x=>x.code===v.partCode);const rem=part?part.kg-usedKg(v.partCode,row&&row.id)-c.w:null;return[['وزن مصرفی',fa2.format(c.w)+' kg'],['مانده پارت پس از این بچ',rem==null?'—':fa2.format(rem)+' kg'],['متریال هر قطعه',fa.format(Math.round(c.unitMat))],['فرآوری هر قطعه',fa.format(Math.round(c.proc))],['تعداد قابل فروش (پس از ضایعات)',fa.format(c.usable)],['قیمت تمام‌شده هر قطعه سالم',fa.format(Math.round(c.unit))]]},
   validate:(v)=>!v.partCode?'پارت متریال را انتخاب کنید.':v.qty<=0?'تعداد تولید باید بیشتر از صفر باشد.':num(v.scrap)<0?'تعداد ضایعات نمی‌تواند منفی باشد.':num(v.scrap)>v.qty?'تعداد ضایعات نمی‌تواند از تعداد تولید بیشتر باشد.':''},
  sales:{title:'فروش',one:'فروش',hint:'محصول و بهای تمام‌شده از دسته تولید انتخاب‌شده می‌آید.',
   calc:sCalc,
   cols:[
-   {h:'تاریخ',v:r=>r.date,k:'date'},{h:'محصول',v:(r,c)=>c.b?prodName(c.b.productId):'—'},{h:'کد بچ',v:r=>r.batchCode},
+   {h:'تاریخ',v:r=>r.date,k:'date'},{h:'محصول',v:(r,c)=>c.b?prodName(c.b.productId):'—'},{h:'تیپ',v:(r,c)=>c.typeName||'—'},{h:'کد بچ',v:r=>r.batchCode},
    {h:'تعداد',v:r=>r.qty,k:'int',n:1},{h:'قیمت فروش هر واحد',v:r=>r.price,k:'money',n:1},{h:'مبلغ فروش',v:(r,c)=>c.total,k:'money',n:1},
    {h:'خریدار',v:r=>(buyer(r.buyerId)||{}).name},{h:'تلفن',v:r=>(buyer(r.buyerId)||{}).phone},
    {h:'بهای تمام‌شده هر واحد',v:(r,c)=>c.unit,k:'money',n:1},{h:'سود',v:(r,c)=>c.profit,k:'money',n:1},{h:'حاشیه سود',v:(r,c)=>c.margin,k:'pct',n:1}],
-  foot:(rows)=>({3:rows.reduce((a,x)=>a+x.r.qty,0),5:rows.reduce((a,x)=>a+x.c.total,0),9:rows.reduce((a,x)=>a+x.c.profit,0)}),footKinds:{3:'int',5:'money',9:'money'},
+  foot:(rows)=>({4:rows.reduce((a,x)=>a+x.r.qty,0),6:rows.reduce((a,x)=>a+x.c.total,0),10:rows.reduce((a,x)=>a+x.c.profit,0)}),footKinds:{4:'int',6:'money',10:'money'},
   fields:(row)=>[
    {k:'date',l:'تاریخ فروش',t:'date',req:1},
    {k:'batchCode',l:'دسته تولید',t:'select',wide:1,opts:()=>{const l=state.batches.filter(b=>bCalc(b).stock>0||(row&&row.batchCode===b.code));return l.length?l.map(b=>{const c=bCalc(b);return opt(b.code,`${b.code} · ${prodName(b.productId)} · موجودی ${fa.format(c.stock)} · بهای تمام‌شده ${fa.format(Math.round(c.unit))}`)}):[opt('','موجودی‌ای برای فروش وجود ندارد')]}},
+   {k:'typeId',l:'تیپ محصول فروخته‌شده',t:'select',wide:1,opts:(vals)=>{const b=state.batches.find(x=>x.code===(vals&&vals.batchCode));return b?typesOf(b.productId).map(t=>opt(t.id,t.name)):[]}},
    {k:'qty',l:'تعداد فروخته‌شده',t:'num',req:1},
    {k:'price',l:'قیمت فروش هر واحد (تومان)',t:'num',req:1},
    {k:'buyerId',l:'خریدار',t:'select',wide:1,opts:()=>[...state.buyers.map(b=>opt(b.id,b.name+(b.phone?' · '+faDigits(b.phone):''))),opt('new','＋ خریدار جدید')]},
    {k:'newName',l:'نام خریدار جدید',t:'text',req:1,showIf:v=>v.buyerId==='new'},
    {k:'newPhone',l:'تلفن',t:'tel',showIf:v=>v.buyerId==='new'},
    {k:'newNote',l:'مشخصات / آدرس',t:'text',wide:1,showIf:v=>v.buyerId==='new'}],
-  blank:()=>({date:todayJ(),batchCode:((state.batches.filter(b=>bCalc(b).stock>0)[0])||{}).code||'',qty:'',price:'',buyerId:state.buyers.length?state.buyers[0].id:'new',newName:'',newPhone:'',newNote:''}),
+  blank:()=>{const b0=state.batches.filter(b=>bCalc(b).stock>0)[0];return{date:todayJ(),batchCode:(b0||{}).code||'',typeId:b0?((typesOf(b0.productId)[0]||{}).id||''):'',qty:'',price:'',buyerId:state.buyers.length?state.buyers[0].id:'new',newName:'',newPhone:'',newNote:''}},
   preview:(v,row)=>{const b=state.batches.find(x=>x.code===v.batchCode);if(!b)return[];const sc=sCalc(v);return[['مبلغ فروش',fa.format(Math.round(sc.total))],['بهای تمام‌شده',fa.format(Math.round(sc.cogs))],['سود این فروش',fa.format(Math.round(sc.profit))]]},
   validate:(v,row)=>{const b=state.batches.find(x=>x.code===v.batchCode);if(!b)return'دسته تولید را انتخاب کنید.';if(v.qty<=0)return'تعداد باید بیشتر از صفر باشد.';if(v.price<=0)return'قیمت فروش را وارد کنید.';const c=bCalc(b);const own=row&&row.batchCode===v.batchCode?row.qty:0;if(v.qty>c.stock+own)return`موجودی این بچ فقط ${fa.format(c.stock+own)} عدد است.`;if(v.buyerId==='new'&&!String(v.newName).trim())return'نام خریدار جدید را وارد کنید.';return''}},
  buyers:{title:'خریداران',one:'خریدار',hint:'مشخصات مشتری‌ها؛ هنگام ثبت فروش هم می‌توانید خریدار جدید بسازید.',
@@ -399,13 +543,55 @@ const ENT={
   cols:[{h:'نام',v:r=>r.name},{h:'تلفن',v:r=>r.phone},{h:'مشخصات',v:r=>r.note},{h:'دفعات خرید',v:(r,c)=>c.n,k:'int',n:1},{h:'تعداد قطعات',v:(r,c)=>c.qty,k:'int',n:1},{h:'مجموع خرید',v:(r,c)=>c.amt,k:'money',n:1}],
   fields:()=>[{k:'name',l:'نام خریدار',t:'text',req:1},{k:'phone',l:'تلفن',t:'tel'},{k:'note',l:'مشخصات / آدرس',t:'text',wide:1}],
   blank:()=>({name:'',phone:'',note:''}),preview:()=>[],
-  validate:v=>!String(v.name).trim()?'نام خریدار را وارد کنید.':''}
+  validate:v=>!String(v.name).trim()?'نام خریدار را وارد کنید.':''},
+ ledger:{title:'حساب سهامداران',one:'تراکنش صندوق',hint:'',
+  calc:()=>({}),
+  cols:[
+   {h:'تاریخ',v:r=>r.date,k:'date'},
+   {h:'سهامدار',v:r=>shName(r.sh)},
+   {h:'نوع',v:r=>({capital:'آورده',withdraw:'برداشت',settle:'تسویه سود'})[r.kind]||r.kind},
+   {h:'مبلغ (تومان)',v:r=>r.amount,k:'money',n:1},
+   {h:'شرح',v:r=>[r.kind==='withdraw'?({profit:'از سود',advance:'علی‌الحساب',other:'سایر'})[r.sub]:'',r.note].filter(Boolean).join(' · '),txt:1}],
+  foot:(rows)=>{const same=rows.length>0&&rows.every(x=>x.r.kind===rows[0].r.kind);return same?{3:rows.reduce((a,x)=>a+(+x.r.amount||0),0)}:{}},footKinds:{3:'money'},
+  fields:()=>[
+   {k:'date',l:'تاریخ',t:'date',req:1,hint:'شمسی، مثل ۱۴۰۵/۰۶/۱۵'},
+   {k:'kind',l:'نوع تراکنش',t:'select',opts:()=>[opt('capital','آورده (سرمایه‌گذاری سهامدار)'),opt('withdraw','برداشت از صندوق')]},
+   {k:'sh',l:'سهامدار',t:'select',opts:()=>Array.from({length:nSh()},(_,i)=>opt(String(i),shName(i)))},
+   {k:'amount',l:'مبلغ (تومان)',t:'num',req:1},
+   {k:'sub',l:'نوع برداشت',t:'select',opts:()=>[opt('profit','برداشت از سود'),opt('advance','علی‌الحساب'),opt('other','سایر')],showIf:v=>v.kind==='withdraw'},
+   {k:'note',l:'توضیحات',t:'text',wide:1}],
+  blank:(preset)=>({date:todayJ(),kind:'withdraw',sh:'0',amount:'',sub:'profit',note:'',...(preset||{})}),
+  preview:()=>[],
+  logText:(v)=>`${v.kind==='capital'?'ثبت آورده':'ثبت برداشت'} ${shName(v.sh)} به مبلغ ${fa.format(Math.round(v.amount))}`,
+  validate:v=>v.amount<=0?'مبلغ را وارد کنید.':''},
+ stockout:{title:'خروج/مصرف از انبار',one:'خروج از انبار',hint:'',
+  calc:()=>({}),
+  cols:[
+   {h:'تاریخ',v:r=>r.date,k:'date'},{h:'پارت',v:r=>r.partCode},
+   {h:'متریال / کالا',v:r=>{const p=state.purchases.find(x=>x.code===r.partCode);return p?mat(p.materialId).name:'—'}},
+   {h:'مقدار',v:r=>{const p=state.purchases.find(x=>x.code===r.partCode);const c=p&&unitOf(p.materialId)==='count';return(c?fa.format(r.qty):fa2.format(r.qty))+' '+(c?'عدد':'kg')},fv:r=>r.qty,nk:1,n:1},
+   {h:'توضیحات',v:r=>r.note,txt:1}],
+  fields:()=>[
+   {k:'date',l:'تاریخ',t:'date',req:1},
+   {k:'partCode',l:'از کدام پارت خرید؟',t:'select',wide:1,opts:()=>state.purchases.length?state.purchases.map(p=>{const c=unitOf(p.materialId)==='count';const rem=p.kg-usedKg(p.code);return opt(p.code,`${p.code} · ${mat(p.materialId).name} · مانده ${c?fa.format(rem):fa2.format(rem)} ${c?'عدد':'kg'}`)}):[opt('','ابتدا یک خرید ثبت کنید')]},
+   {k:'qty',l:'مقدار خروجی/مصرف‌شده',t:'num',req:1},
+   {k:'note',l:'توضیحات (مثلاً مصرف در بچ T003)',t:'text',wide:1}],
+  blank:()=>({date:todayJ(),partCode:(state.purchases.slice(-1)[0]||{}).code||'',qty:'',note:''}),
+  preview:(v,row)=>{const p=state.purchases.find(x=>x.code===v.partCode);if(!p)return[];const c=unitOf(p.materialId)==='count';const rem=p.kg-usedKg(p.code)+(row&&row.partCode===v.partCode?row.qty:0)-v.qty;return[['مانده پارت پس از این خروج',(c?fa.format(rem):fa2.format(rem))+' '+(c?'عدد':'kg')]]},
+  logText:(v)=>`ثبت خروج از انبار: پارت ${v.partCode} مقدار ${v.qty}`,
+  validate:(v,row)=>{const p=state.purchases.find(x=>x.code===v.partCode);if(!p)return'پارت را انتخاب کنید.';if(v.qty<=0)return'مقدار را وارد کنید.';const rem=p.kg-usedKg(p.code)+(row&&row.partCode===v.partCode?row.qty:0);if(v.qty>rem+1e-9)return`مانده‌ی این پارت فقط ${rem} است.`;return''}}
 };
 
 /* ======== نمایش ======== */
 let tab=sessionStorage.getItem('tab')||'dash';
-const TABS=[['dash','داشبورد'],['purchases','خرید متریال'],['batches','تولید'],['sales','فروش'],['buyers','خریداران'],['invoice','فاکتور'],['cost','بهای تمام‌شده'],['activity','لاگ تغییرات'],['settings','تنظیمات'],['access','دسترسی‌ها']];
+const TABS=[['dash','داشبورد'],['purchases','خرید متریال'],['batches','تولید'],['sales','فروش'],['buyers','خریداران'],['warehouse','انبار'],['partners','صندوق و سهامداران'],['invoice','فاکتور'],['cost','بهای تمام‌شده'],['activity','لاگ تغییرات'],['settings','تنظیمات'],['access','دسترسی‌ها']];
 function render(){
+ const ae=document.activeElement;let keep=null;
+ if(ae&&ae.classList&&ae.classList.contains('flt')&&ae.tagName==='INPUT')keep={tid:ae.dataset.tid,col:ae.dataset.col,p:ae.selectionStart};
+ renderInner();
+ if(keep){const el=document.querySelector('.flt[data-tid="'+keep.tid+'"][data-col="'+keep.col+'"]');if(el){el.focus();try{el.setSelectionRange(keep.p,keep.p)}catch(e){}}}
+}
+function renderInner(){
  const visible=TABS.filter(([k])=>canSeeTab(k));
  if(!visible.some(([k])=>k===tab))tab='dash';
  $('#nav').innerHTML=visible.map(([k,l])=>`<button data-tab="${k}" class="${k===tab?'on':''}">${l}</button>`).join('');
@@ -432,19 +618,15 @@ function render(){
  else if(tab==='activity')m.innerHTML=activityView();
  else if(tab==='access')m.innerHTML=accessView();
  else if(tab==='invoice')m.innerHTML=invoiceListView();
+ else if(tab==='partners')m.innerHTML=partnersView();
+ else if(tab==='warehouse')m.innerHTML=warehouseView();
  else m.innerHTML=listView(tab);
 }
 function listView(key){
- const E=ENT[key];const editable=canEditData();let rows=state[key].map(r=>({r,c:E.calc(r)}));
- if(key!=='buyers')rows=rows.slice().sort((a,b)=>(b.r.date||'').localeCompare(a.r.date||'')||(b.r.createdAt||0)-(a.r.createdAt||0));
+ const E=ENT[key];const editable=canEditData();
  let h=`<div class="bar"><div><h1>${E.title}</h1><p class="sub" style="margin:0">${E.hint}</p></div><div><button class="btn" data-act="csv" data-key="${key}">خروجی اکسل (CSV)</button> ${editable?`<button class="btn pri" data-act="add" data-key="${key}">＋ ثبت ${E.one}</button>`:''}</div></div>`;
  if(key==='purchases'){const neg=state.purchases.filter(p=>p.kg-usedKg(p.code)<-0.005);if(neg.length)h+=`<div class="alert">مصرف بچ‌ها از مقدار خرید بیشتر شده: ${neg.map(p=>p.code).join('، ')}. وزن یا تعداد بچ‌ها را بررسی کنید.</div>`}
- if(!rows.length)return h+`<div class="wrap"><div class="empty">هنوز ${E.one}ی ثبت نشده است.</div></div>`;
- h+=`<div class="wrap"><table><thead><tr>${E.cols.map(c=>`<th class="${c.n?'n':''}">${c.h}</th>`).join('')}<th></th></tr></thead><tbody>`;
- for(const{r,c}of rows)h+=`<tr>${E.cols.map(col=>`<td class="${col.n?'n':''}">${fmt(col.k||'text',col.v(r,c))}</td>`).join('')}<td>${editable?`<button class="btn sm" data-act="edit" data-key="${key}" data-id="${r.id}">ویرایش</button> <button class="btn sm del" data-act="del" data-key="${key}" data-id="${r.id}">حذف</button>`:''}</td></tr>`;
- h+='</tbody>';
- if(E.foot){const f=E.foot(rows);h+=`<tfoot><tr>${E.cols.map((c,i)=>`<td class="${c.n?'n':''}">${i===0?'جمع':(i in f?fmt(E.footKinds[i],f[i]):'')}</td>`).join('')}<td></td></tr></tfoot>`}
- return h+'</table></div>';
+ return h+filterHelp()+entTable(key);
 }
 function dashView(){
  const t=totals();
@@ -456,7 +638,7 @@ function dashView(){
  const names=Array.from({length:n},(_,i)=>S().names[i]||`سهامدار ${faDigits(i+1)}`);
  const L=(l,v,c)=>`<div class="${c||''}"><span>${l}</span><b class="${v<0?'neg':''}">${fa.format(Math.round(v))}</b></div>`;
  let h=`<h1>داشبورد</h1><p class="sub">همه اعداد به تومان و از ثبت‌های شما محاسبه می‌شوند.</p>${banner}<div class="split"><div>
- <div class="ledger">${L('هزینه تأمین متریال (خرید + حمل)',-t.purch)}${L('کل فروش',t.sales)}${L('موجودی صندوق (فروش − تأمین متریال)',t.cash,'key')}${L('هزینه ماشینکاری و فرآوری',-t.proc)}${L('موجودی صندوق پس از همه هزینه‌ها',t.cash2)}${L('ارزش موجودی انبار (به بهای تمام‌شده)',t.stockVal)}${L('سود فروش',t.profit,'key big')}</div>
+ <div class="ledger">${L('آورده سهامداران',t.capital)}${L('کل فروش',t.sales)}${L('هزینه تأمین متریال و اقلام (خرید + حمل)',-t.purch)}${L('هزینه نقدی ماشینکاری و فرآوری',-t.procCash)}${L('برداشت و تسویه سهامداران',-t.withdrawn)}${L('موجودی کلی صندوق (نقد)',t.cash,'key')}${L('ارزش موجودی انبار (محصولات ساخته‌شده)',t.stockVal)}${L('ارزش مواد و اقلام باقی‌مانده در انبار',t.rawVal)}${L('سود فروش',t.profit,'key big')}</div>
  <div class="sect">سهم هر سهامدار (مساوی)</div><div class="shares">${names.map(nm=>`<div class="share"><span>${esc(nm)}</span><b class="${share<0?'neg':''}">${fa.format(Math.round(share))}</b></div>`).join('')}</div></div>`;
  const P=S().products.map(p=>{const bs=state.batches.filter(b=>b.productId===p.id);const bc=bs.map(b=>({b,c:bCalc(b)}));const ss=state.sales.map(s=>({s,c:sCalc(s)})).filter(x=>x.c.b&&x.c.b.productId===p.id);return{p,made:bs.reduce((a,b)=>a+b.qty,0),sold:ss.reduce((a,x)=>a+x.s.qty,0),rev:ss.reduce((a,x)=>a+x.c.total,0),cogs:ss.reduce((a,x)=>a+x.c.cogs,0),profit:ss.reduce((a,x)=>a+x.c.profit,0),cost:bc.reduce((a,x)=>a+x.c.total,0)}});
  const mx=Math.max(1,...P.map(x=>Math.max(x.rev,x.cogs,Math.abs(x.profit))));
@@ -486,6 +668,7 @@ function settingsView(){
  <div class="sset"><b>سهامداران</b><p class="mut" style="margin:4px 0 10px">سود فروش بین این تعداد نفر به‌صورت مساوی تقسیم می‌شود.</p><table><tr><td>تعداد</td><td>${inp('count',s.count)}</td></tr>${[0,1,2].map(i=>`<tr><td>نام سهامدار ${faDigits(i+1)}</td><td>${inpT('names.'+i,s.names[i])}</td></tr>`).join('')}</table></div>
  <div class="sset"><b>متریال‌های ورودی</b><p class="mut" style="margin:4px 0 10px">تا ۱۵ نوع متریال/کالای خریداری‌شده می‌توانید اضافه کنید. برای اقلامی مثل بلبرینگ، پیچ، ورق، پکینگ، واشر و... واحد را «عدد» بگذارید تا در فرم خرید به‌جای کیلوگرم، تعداد و قیمت هر عدد بپرسد؛ قطر و چگالی برای این‌ها اهمیتی ندارد.</p><table><thead><tr><th>نام</th><th>واحد</th><th>قطر بیرونی (mm)</th><th>قطر داخلی (mm)</th><th>چگالی (g/cm³)</th><th></th></tr></thead>${s.materials.map((m,i)=>`<tr><td>${inpT(`materials.${i}.name`,m.name)}</td><td><select data-path="materials.${i}.unit"><option value="kg"${m.unit!=='count'?' selected':''}>کیلوگرم</option><option value="count"${m.unit==='count'?' selected':''}>عدد</option></select></td><td>${inp(`materials.${i}.od`,m.od)}</td><td>${inp(`materials.${i}.idm`,m.idm)}</td><td>${inp(`materials.${i}.density`,m.density)}</td><td>${canEditData()&&s.materials.length>1?`<button class="btn sm del" data-act="delmat" data-idx="${i}">حذف</button>`:''}</td></tr>`).join('')}</table>${canEditData()&&s.materials.length<15?`<div style="margin-top:8px"><button class="btn sm" data-act="addmat">＋ افزودن نوع متریال</button></div>`:''}</div>
  <div class="sset"><b>محصولات</b><p class="mut" style="margin:4px 0 10px">طول برش و درصد ضایعات فقط برای محاسبه وزن مصرفی است.</p><table><thead><tr><th>نام</th><th>متریال</th><th>طول برش هر قطعه (mm)</th><th>ضایعات (٪)</th><th>وزن هر قطعه با ضایعات (kg)</th></tr></thead>${s.products.map((p,i)=>`<tr><td>${inpT(`products.${i}.name`,p.name)}</td><td><select data-path="products.${i}.materialId">${s.materials.map(m=>`<option value="${m.id}"${m.id===p.materialId?' selected':''}>${esc(m.name)}</option>`).join('')}</select></td><td>${inp(`products.${i}.length`,p.length)}</td><td>${inp(`products.${i}.waste`,p.waste)}</td><td>${fa2.format(unitWeight(p)*(1+p.waste/100))}</td></tr>`).join('')}</table></div>
+ ${typesEditor()}
  <div class="sset"><b>اطلاعات فاکتور و سربرگ</b><p class="mut" style="margin:4px 0 10px">در فاکتور چاپی نمایش داده می‌شود.</p><table>
  <tr><td>نام شرکت</td><td>${inpT('company.name',s.company.name)}</td></tr>
  <tr><td>آدرس</td><td>${inpT('company.address',s.company.address)}</td></tr>
@@ -496,14 +679,19 @@ function settingsView(){
  </table></div>`;
  return h;
 }
+function materializeTypes(){for(const p of S().products){if(!p.types||!p.types.length)p.types=defaultTypes(p).map(t=>({...t,excl:[...(t.excl||[])]}))}}
+function typesEditor(){
+ const ed=canEditData();
+ return`<div class="sset"><b>تیپ‌های فروش هر محصول</b><p class="mut" style="margin:4px 0 10px">هنگام ثبت فروش، تیپ کالا را انتخاب می‌کنید (مثلاً شاتون مونتاژ شده یا شاتون خام). تیک هر ستون یعنی هزینه‌ی آن قلم جزو بهای تمام‌شده‌ی همین تیپ هست؛ برای «شاتون خام» تیک بلبرینگ و پیچ را بردارید تا بهای تمام‌شده و سود درست حساب شود.</p>
+ ${S().products.map((p,pi)=>{const ts=typesOf(p.id);return`<div style="margin:12px 0 4px"><b>${esc(p.name)}</b></div><table><thead><tr><th>نام تیپ</th><th>اقلام جزو این تیپ</th><th></th></tr></thead>${ts.map((t,ti)=>`<tr><td><input data-path="products.${pi}.types.${ti}.name" value="${esc(t.name)}"></td><td>${EXCL_FIELDS.map(([k,l])=>`<label style="white-space:nowrap;margin-inline-end:10px"><input type="checkbox" style="width:auto" data-act="toggleexcl" data-pi="${pi}" data-ti="${ti}" data-k="${k}" ${(t.excl||[]).includes(k)?'':'checked'}${ed?'':' disabled'}> ${l}</label>`).join('')}</td><td>${ed&&ts.length>1?`<button class="btn sm del" data-act="deltype" data-pi="${pi}" data-ti="${ti}">حذف</button>`:''}</td></tr>`).join('')}</table>${ed?`<div style="margin-top:6px"><button class="btn sm" data-act="addtype" data-pi="${pi}">＋ تیپ جدید برای ${esc(p.name)}</button></div>`:''}`}).join('')}</div>`;
+}
 function activityView(){
- let h=`<div class="bar"><div><h1>لاگ تغییرات</h1><p class="sub" style="margin:0">هر تغییری که هرکس انجام دهد، با نام و ساعت و دقیقه اینجا ثبت می‌شود.</p></div><button class="btn" data-act="csvact">خروجی اکسل (CSV)</button></div>`;
+ let h=`<div class="bar"><div><h1>لاگ تغییرات</h1><p class="sub" style="margin:0">هر تغییری که هرکس انجام دهد، با نام و ساعت و دقیقه اینجا ثبت می‌شود.</p></div><button class="btn" data-act="csv" data-key="activity">خروجی اکسل (CSV)</button></div>`;
  if(!isOnline())h+='<div class="alert">لاگ کامل و چندکاربره فقط در حالت آنلاین در دسترس است؛ این فهرست فقط رویدادهای همین دستگاه را نشان می‌دهد. از دکمه «اتصال آنلاین» در نوار کناری استفاده کنید.</div>';
- if(!state.activity.length)return h+'<div class="wrap"><div class="empty">هنوز رویدادی ثبت نشده است.</div></div>';
- const ids=state.activity.map(a=>a.actorId);resolveProfiles(ids);
- h+='<div class="wrap"><table><thead><tr><th>زمان</th><th>کاربر</th><th>رویداد</th></tr></thead><tbody>';
- for(const a of state.activity)h+=`<tr><td>${tsToStr(a.ts)}</td><td>${esc(nameOf(a.actorId))}</td><td>${esc(a.action)}</td></tr>`;
- return h+'</tbody></table></div>';
+ resolveProfiles(state.activity.map(a=>a.actorId));
+ h+=filterHelp();
+ h+=tableHTML('activity',{cols:[{h:'زمان',v:a=>tsToStr(a.ts),txt:1},{h:'کاربر',v:a=>nameOf(a.actorId)},{h:'رویداد',v:a=>a.action,txt:1}],rows:()=>state.activity.map(a=>({r:a,c:{}})),emptyMsg:'هنوز رویدادی ثبت نشده است.',actions:null});
+ return h;
 }
 function accessView(){
  if(!isOnline())return`<h1>دسترسی‌ها</h1><p class="sub">این بخش فقط در حالت آنلاین کاربرد دارد؛ در حالت آفلاین همه تب‌ها در دسترس شماست. از دکمه «اتصال آنلاین» در نوار کناری استفاده کنید.</p>`;
@@ -524,18 +712,17 @@ function accessView(){
 function codeOfBatch(code){return code||''}
 function invoiceNo(s,i){const y=(s.date||'').split('/')[0]||'----';return'AP-'+y+'-'+pad4(i+1)}
 function invoiceListView(){
- let h=`<h1>صدور فاکتور</h1><p class="sub">برای هر فروش، فاکتور رسمی با سربرگ آماده و قابل چاپ می‌سازد.</p>`;
- const rows=state.sales.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
- if(!rows.length)return h+'<div class="wrap"><div class="empty">هنوز فروشی ثبت نشده است.</div></div>';
- h+='<div class="wrap"><table><thead><tr><th>شماره فاکتور</th><th>تاریخ</th><th>محصول</th><th class="n">تعداد</th><th class="n">مبلغ</th><th>خریدار</th><th></th></tr></thead><tbody>';
- rows.forEach((s,i)=>{const c=sCalc(s);h+=`<tr><td>${invoiceNo(s,i)}</td><td>${fmt('date',s.date)}</td><td>${esc(c.b?prodName(c.b.productId):'—')}</td><td class="n">${fmt('int',s.qty)}</td><td class="n">${fmt('money',c.total)}</td><td>${esc((buyer(s.buyerId)||{}).name)}</td><td><button class="btn sm pri" data-act="invoice" data-id="${s.id}">مشاهده و چاپ</button></td></tr>`});
- return h+'</tbody></table></div>';
+ const sorted=state.sales.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+ const noOf={};sorted.forEach((x,i)=>noOf[x.id]=invoiceNo(x,i));
+ let h=`<div class="bar"><div><h1>صدور فاکتور</h1><p class="sub" style="margin:0">برای هر فروش، فاکتور رسمی با سربرگ آماده و قابل چاپ می‌سازد.</p></div><button class="btn" data-act="csv" data-key="invoice">خروجی اکسل (CSV)</button></div>`+filterHelp();
+ h+=tableHTML('invoice',{cols:[{h:'شماره فاکتور',v:r=>noOf[r.id]},{h:'تاریخ',v:r=>r.date,k:'date'},{h:'محصول',v:(r,c)=>c.b?prodName(c.b.productId):'—'},{h:'تیپ',v:(r,c)=>c.typeName||'—'},{h:'تعداد',v:r=>r.qty,k:'int',n:1},{h:'مبلغ',v:(r,c)=>c.total,k:'money',n:1},{h:'خریدار',v:r=>(buyer(r.buyerId)||{}).name}],rows:()=>sorted.map(r=>({r,c:sCalc(r)})).reverse(),emptyMsg:'هنوز فروشی ثبت نشده است.',actions:(r)=>`<button class="btn sm pri" data-act="invoice" data-id="${r.id}">مشاهده و چاپ</button>`});
+ return h;
 }
 function openInvoice(saleId){
  const s=state.sales.find(x=>x.id===saleId);if(!s)return;
  const idx=state.sales.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).findIndex(x=>x.id===saleId);
  const c=sCalc(s),b=buyer(s.buyerId)||{},co=S().company||{};
- const prodNm=c.b?prodName(c.b.productId):'—';
+ const prodNm=(c.b?prodName(c.b.productId):'—')+(c.typeName?' — '+c.typeName:'');
  const html=`<div class="inv-sheet">
   <div class="inv-head"><div><div class="inv-co-name">${esc(co.name||'ایرپلاس پنوماتیک')}</div>
    <div class="inv-co-meta">${[co.address,co.phone,co.eco?('شناسه اقتصادی: '+co.eco):'',co.bank?('شماره حساب: '+co.bank):''].filter(Boolean).map(esc).join(' · ')}</div></div>
@@ -552,26 +739,119 @@ function openInvoice(saleId){
  $('#dlg').showModal();
 }
 
+/* ======== صندوق و سهامداران ======== */
+function partnersView(){
+ const t=totals(),ps=partnerStats(),editable=canEditData();
+ const L=(l,v,c)=>`<div class="${c||''}"><span>${l}</span><b class="${v<0?'neg':''}">${fa.format(Math.round(v))}</b></div>`;
+ let h=`<div class="bar"><div><h1>صندوق و سهامداران</h1><p class="sub" style="margin:0">آورده، برداشت، تسویه حساب و موجودی کلی صندوق</p></div><div>${editable?`<button class="btn" data-act="addcap">＋ ثبت آورده</button> <button class="btn" data-act="addwd">＋ ثبت برداشت</button> <button class="btn pri" data-act="opensettle">تسویه حساب</button>`:''}</div></div>`;
+ if(!t.capital)h+=`<div class="alert">هنوز آوردهٔ سهامداران ثبت نشده است. برای محاسبهٔ درست موجودی صندوق، آوردهٔ اولیهٔ هر سهامدار را با «ثبت آورده» (با تاریخ شروع کار) وارد کنید.</div>`;
+ h+=`<div class="split"><div><div class="ledger">${L('آورده سهامداران',t.capital)}${L('کل فروش',t.sales)}${L('خرید متریال و اقلام (خرید + حمل)',-t.purch)}${L('هزینه‌های نقدی ماشینکاری و فرآوری',-t.procCash)}${L('برداشت و تسویه سهامداران',-t.withdrawn)}${L('موجودی کلی صندوق (نقد)',t.cash,'key big')}</div>
+ <p class="mut" style="font-size:12px;margin:6px 2px 0">بلبرینگ، پیچ و سایر اقلام مصرفی: هزینه‌شان هنگام «خرید متریال» از صندوق کم می‌شود؛ در «تولید» فقط برای محاسبه‌ی قیمت تمام‌شده استفاده می‌شوند.</p></div>
+ <div><div class="ledger">${L('ارزش محصولات ساخته‌شده و فروخته‌نشده',t.stockVal)}${L('ارزش مواد و اقلام باقی‌مانده در انبار',t.rawVal)}${L('سود فروش (کل)',t.profit,'key')}${L(ps.lastSettle?'سود دوره‌ی جاری (پس از تسویه '+faDigits(ps.lastSettle)+')':'سود دوره‌ی جاری (هنوز تسویه‌ای نشده)',ps.periodProfit)}</div></div></div>`;
+ h+=`<div class="sect">حساب هر سهامدار</div><div class="wrap"><table><thead><tr><th>سهامدار</th><th class="n">آورده</th><th class="n">سهم از سود کل</th><th class="n">برداشت و تسویه‌ها</th><th class="n">مانده سود</th><th class="n">مانده حساب (آورده + مانده سود)</th><th class="n">سهم از سود دوره‌ی جاری</th></tr></thead><tbody>${ps.rows.map(r=>`<tr><td>${esc(r.name)}</td><td class="n">${fmt('money',r.capital)}</td><td class="n">${fmt('money',r.share)}</td><td class="n">${fmt('money',r.withdraw)}</td><td class="n">${fmt('money',r.remainProfit)}</td><td class="n"><b>${fmt('money',r.balance)}</b></td><td class="n">${fmt('money',r.periodShare)}</td></tr>`).join('')}</tbody></table></div>
+ <p class="mut" style="font-size:12px;margin:6px 2px 0">مانده سود = سهم از سود کل − برداشت‌ها و تسویه‌ها. مانده حساب یعنی آنچه صندوق (شامل آورده و سود تسویه‌نشده) به آن سهامدار بدهکار است.</p>`;
+ h+=`<div class="bar" style="margin-top:22px"><div class="sect" style="margin:0">تراکنش‌های سهامداران</div><button class="btn sm" data-act="csv" data-key="ledger">خروجی CSV</button></div>`+filterHelp()+entTable('ledger',{pred:x=>x.kind!=='settlement',actions:editable?(r)=>r.kind==='settle'?'<span class="mut">از تسویه</span>':`<button class="btn sm" data-act="edit" data-key="ledger" data-id="${r.id}">ویرایش</button> <button class="btn sm del" data-act="del" data-key="ledger" data-id="${r.id}">حذف</button>`:null,emptyMsg:'هنوز آورده یا برداشتی ثبت نشده است.'});
+ h+=`<div class="bar" style="margin-top:22px"><div class="sect" style="margin:0">تسویه‌های انجام‌شده</div></div>`+tableHTML('settlements',{cols:[{h:'تاریخ تسویه',v:r=>r.date,k:'date'},{h:'سود کل تا آن تاریخ',v:r=>r.profitTo,k:'money',n:1},{h:'جمع پرداخت‌شده به سهامداران',v:r=>r.amount,k:'money',n:1}],rows:()=>settlements().slice().reverse().map(r=>({r,c:{}})),emptyMsg:'هنوز تسویه‌ای انجام نشده است.',actions:editable?(r)=>`<button class="btn sm del" data-act="cancelsettle" data-id="${r.id}">لغو تسویه</button>`:null});
+ return h;
+}
+function openSettleDialog(){
+ if(!guardEdit())return;cur=null;
+ $('#dlg').innerHTML=`<div class="dh">تسویه حساب صندوق با سهامداران</div><div class="db" style="grid-template-columns:1fr"><label class="fld"><span>تاریخ تسویه (شمسی)</span><input id="setdate" value="${todayJ()}" dir="ltr" style="text-align:right" autocomplete="off"><small>سود فروش‌های تا این تاریخ، پس از کسر برداشت‌های قبلی، بین سهامداران تسویه می‌شود؛ محاسبه‌ی سود از تاریخ بعد از آن دوباره شروع می‌شود. آورده‌ها دست‌نخورده می‌مانند.</small></label><div id="setprev"></div><div class="err" id="seterr"></div></div><div class="df"><button class="btn pri" data-act="dosettle">ثبت تسویه</button><button class="btn" data-act="cancel">انصراف</button></div>`;
+ $('#dlg').showModal();updateSettlePreview();
+}
+function updateSettlePreview(){
+ const inp=$('#setdate'),box=$('#setprev');if(!inp||!box)return;
+ const D=normDate(inp.value);
+ if(!D){box.innerHTML='<p class="mut">تاریخ را درست وارد کنید (مثل ۱۴۰۵/۰۶/۱۵).</p>';return}
+ const p=settlePreview(D),t=totals();
+ box.innerHTML=`<table><thead><tr><th>سهامدار</th><th class="n">سهم از سود تا تاریخ</th><th class="n">برداشت‌های قبلی</th><th class="n">قابل تسویه</th></tr></thead><tbody>${p.rows.map(r=>`<tr><td>${esc(r.name)}</td><td class="n">${fa.format(Math.round(r.share))}</td><td class="n">${fa.format(Math.round(r.wd))}</td><td class="n"><b>${fa.format(r.pay)}</b>${r.claim<-0.5?'<br><small class="neg">برداشت بیش از سهم سود؛ تسویه‌ای ثبت نمی‌شود</small>':''}</td></tr>`).join('')}</tbody><tfoot><tr><td>جمع</td><td class="n">${fa.format(Math.round(p.profitTo))}</td><td></td><td class="n">${fa.format(p.total)}</td></tr></tfoot></table>${p.total>t.cash?`<div class="alert" style="margin-top:8px">موجودی نقد صندوق (${fa.format(Math.round(t.cash))}) از مجموع تسویه کمتر است.</div>`:''}`;
+}
+async function doSettle(){
+ if(!guardEdit())return;
+ const D=normDate(($('#setdate')||{}).value||'');if(!D){$('#seterr').textContent='تاریخ معتبر نیست.';return}
+ const p=settlePreview(D);
+ if(!p.rows.some(r=>r.pay>0)&&!confirm('برای هیچ سهامداری مبلغ قابل تسویه‌ای وجود ندارد؛ فقط تاریخ تسویه ثبت شود؟'))return;
+ const grp=Date.now().toString(36);
+ try{
+  for(const r of p.rows)if(r.pay>0)await addDoc('ledger',{date:D,sh:String(r.i),kind:'settle',amount:r.pay,note:'تسویه سود تا '+D,grp});
+  await addDoc('ledger',{date:D,sh:'',kind:'settlement',amount:p.total,profitTo:Math.round(p.profitTo),grp,note:''});
+  logActivity(`تسویه حساب با سهامداران تا تاریخ ${D} به مبلغ ${fa.format(p.total)}`);
+  $('#dlg').close();toast('تسویه ثبت شد');render();
+ }catch(e){$('#seterr').textContent='ثبت ناموفق بود: '+((e&&(e.code||e.message))||e)}
+}
+async function cancelSettle(id){
+ const m=state.ledger.find(x=>x.id===id);if(!m||!guardEdit())return;
+ if(!confirm('این تسویه لغو شود؟ پرداخت‌های ثبت‌شده‌ی همین تسویه هم حذف می‌شوند.'))return;
+ try{
+  const list=state.ledger.filter(x=>x.grp===m.grp&&x.kind==='settle');
+  for(const x of list)await delDoc('ledger',x.id);
+  await delDoc('ledger',m.id);
+  logActivity('لغو تسویه حساب تاریخ '+m.date);render();toast('تسویه لغو شد');
+ }catch(e){toast('لغو ناموفق بود: '+((e&&(e.code||e.message))||e))}
+}
+
+/* ======== انبار ======== */
+let whEmpty=false;
+const qtyStr=(u,v)=>(u==='count'?fa.format(v):fa2.format(v))+' '+(u==='count'?'عدد':'kg');
+function warehouseView(){
+ const t=totals(),editable=canEditData();
+ const L=(l,v,c)=>`<div class="${c||''}"><span>${l}</span><b>${fa.format(Math.round(v))}</b></div>`;
+ let h=`<div class="bar"><div><h1>انبار</h1><p class="sub" style="margin:0">موجودی مواد و اقلام خریداری‌شده و محصولات ساخته‌شده‌ی فروخته‌نشده</p></div><div>${editable?`<button class="btn pri" data-act="add" data-key="stockout">＋ ثبت خروج/مصرف از انبار</button>`:''}</div></div>`;
+ h+=`<div class="ledger" style="max-width:520px;margin-bottom:14px">${L('ارزش مواد و اقلام خریداری‌شده (مانده)',t.rawVal)}${L('ارزش محصولات ساخته‌شده (فروخته‌نشده)',t.stockVal)}${L('جمع ارزش انبار',t.rawVal+t.stockVal,'key')}</div>`+filterHelp();
+ h+=`<div class="bar"><b>مواد و اقلام خریداری‌شده</b><div><label style="font-size:12.5px"><input type="checkbox" data-act="whempty" ${whEmpty?'checked':''}> نمایش پارت‌های تمام‌شده</label> <button class="btn sm" data-act="csv" data-key="wh_raw">خروجی CSV</button></div></div>`;
+ h+=tableHTML('wh_raw',{cols:[
+  {h:'کد پارت',v:r=>r.code},{h:'تاریخ',v:r=>r.date,k:'date'},{h:'متریال / کالا',v:r=>mat(r.materialId).name},
+  {h:'مقدار خرید',v:(r,c)=>qtyStr(c.u,r.kg),fv:r=>r.kg,nk:1,n:1},
+  {h:'مصرف در تولید',v:(r,c)=>qtyStr(c.u,c.usedB),fv:(r,c)=>c.usedB,nk:1,n:1},
+  {h:'خروج دستی',v:(r,c)=>qtyStr(c.u,c.outM),fv:(r,c)=>c.outM,nk:1,n:1},
+  {h:'مانده',v:(r,c)=>qtyStr(c.u,c.rem),fv:(r,c)=>c.rem,nk:1,n:1},
+  {h:'قیمت تمام‌شده هر واحد',v:(r,c)=>fa.format(Math.round(c.perKg))+' / '+(c.u==='count'?'عدد':'kg'),fv:(r,c)=>c.perKg,nk:1,n:1},
+  {h:'ارزش مانده',v:(r,c)=>c.val,k:'money',n:1}],
+  rows:()=>rawStockRows().filter(x=>whEmpty||x.c.rem>0.0001).sort((a,b)=>(b.r.date||'').localeCompare(a.r.date||'')),
+  foot:(rows)=>{const same=rows.every(x=>x.r.materialId===rows[0].r.materialId);const u=rows[0].c.u;const o={8:rows.reduce((a,x)=>a+x.c.val,0)};if(same){o[3]=qtyStr(u,rows.reduce((a,x)=>a+x.r.kg,0));o[4]=qtyStr(u,rows.reduce((a,x)=>a+x.c.usedB,0));o[5]=qtyStr(u,rows.reduce((a,x)=>a+x.c.outM,0));o[6]=qtyStr(u,rows.reduce((a,x)=>a+x.c.rem,0))}return o},
+  footKinds:{3:'text',4:'text',5:'text',6:'text',8:'money'},emptyMsg:'موجودی مواد در انبار نیست.',actions:null});
+ const raw=rawStockRows();
+ const msum=S().materials.map(m=>{const xs=raw.filter(x=>x.r.materialId===m.id);if(!xs.length)return'';const u=m.unit==='count'?'count':'kg';const sm=f=>xs.reduce((a,x)=>a+f(x),0);return`<tr><td>${esc(m.name)}</td><td class="n">${qtyStr(u,sm(x=>x.r.kg))}</td><td class="n">${qtyStr(u,sm(x=>x.c.usedB))}</td><td class="n">${qtyStr(u,sm(x=>x.c.outM))}</td><td class="n"><b>${qtyStr(u,sm(x=>x.c.rem))}</b></td><td class="n">${fmt('money',sm(x=>x.c.val))}</td></tr>`}).join('');
+ h+=`<div class="sect">خلاصه‌ی موجودی هر نوع متریال / کالا</div><div class="wrap"><table><thead><tr><th>متریال / کالا</th><th class="n">خریداری‌شده</th><th class="n">مصرف در تولید</th><th class="n">خروج دستی</th><th class="n">مانده</th><th class="n">ارزش مانده</th></tr></thead><tbody>${msum||'<tr><td colspan="6" class="empty">هنوز خریدی ثبت نشده است.</td></tr>'}</tbody></table></div>`;
+ h+=`<div class="bar" style="margin-top:22px"><b>محصولات ساخته‌شده‌ی فروخته‌نشده</b><button class="btn sm" data-act="csv" data-key="wh_fin">خروجی CSV</button></div>`;
+ h+=tableHTML('wh_fin',{cols:[
+  {h:'کد بچ',v:r=>r.code},{h:'تاریخ',v:r=>r.date,k:'date'},{h:'محصول',v:r=>prodName(r.productId)},
+  {h:'تعداد تولید',v:r=>r.qty,k:'int',n:1},{h:'ضایعات',v:(r,c)=>c.scrap,k:'int',n:1},{h:'فروخته',v:(r,c)=>c.sold,k:'int',n:1},
+  {h:'موجودی',v:(r,c)=>c.stock,k:'int',n:1},{h:'بهای هر قطعه سالم',v:(r,c)=>c.unit,k:'money',n:1},{h:'ارزش موجودی',v:(r,c)=>c.stockVal,k:'money',n:1}],
+  rows:()=>state.batches.map(b=>({r:b,c:bCalc(b)})).filter(x=>x.c.stock>0).sort((a,b)=>(b.r.date||'').localeCompare(a.r.date||'')),
+  foot:(rows)=>({6:rows.reduce((a,x)=>a+x.c.stock,0),8:rows.reduce((a,x)=>a+x.c.stockVal,0)}),footKinds:{6:'int',8:'money'},emptyMsg:'محصول فروخته‌نشده‌ای در انبار نیست.',actions:null});
+ const psum=S().products.map(p=>{const bs=state.batches.filter(b=>b.productId===p.id).map(b=>bCalc(b));const usable=bs.reduce((a,c)=>a+c.usable,0),sold=bs.reduce((a,c)=>a+c.sold,0),stock=bs.reduce((a,c)=>a+c.stock,0),val=bs.reduce((a,c)=>a+c.stockVal,0);return`<tr><td>${esc(p.name)}</td><td class="n">${fmt('int',usable)}</td><td class="n">${fmt('int',sold)}</td><td class="n"><b>${fmt('int',stock)}</b></td><td class="n">${fmt('money',val)}</td></tr>`}).join('');
+ h+=`<div class="sect">خلاصه‌ی موجودی هر محصول</div><div class="wrap"><table><thead><tr><th>محصول</th><th class="n">قابل فروش (پس از ضایعات)</th><th class="n">فروخته</th><th class="n">موجودی</th><th class="n">ارزش موجودی</th></tr></thead><tbody>${psum}</tbody></table></div>`;
+ h+=`<div class="bar" style="margin-top:22px"><div><b>خروج/مصرف دستی از انبار</b><p class="mut" style="margin:2px 0 0;font-size:12px">مثلاً بلبرینگ و پیچی که در تولید مصرف شده یا ضایعات ورق را اینجا ثبت کنید تا از موجودی کم شود.</p></div><button class="btn sm" data-act="csv" data-key="stockout">خروجی CSV</button></div>`+entTable('stockout',{emptyMsg:'هنوز خروجی ثبت نشده است.'});
+ return h;
+}
+
 /* ======== فرم‌ها ======== */
 let cur=null;
-function fieldHTML(f,v){
+function fieldHTML(f,v,vals){
  const id='f_'+f.k;let inp;
- if(f.t==='select')inp=`<select id="${id}" name="${f.k}">${f.opts().map(o=>`<option value="${esc(o.v)}"${o.v===v?' selected':''}>${esc(o.l)}</option>`).join('')}</select>`;
+ if(f.t==='select')inp=`<select id="${id}" name="${f.k}">${f.opts(vals).map(o=>`<option value="${esc(o.v)}"${o.v===v?' selected':''}>${esc(o.l)}</option>`).join('')}</select>`;
  else{const raw=(f.t==='num'&&(v===0||v===''||v==null))?'':v;inp=`<input id="${id}" name="${f.k}" value="${esc(raw??'')}" ${f.t==='num'?'inputmode="decimal"':''} ${f.t==='date'||f.t==='tel'?'dir="ltr" style="text-align:right"':''} autocomplete="off">`}
  return`<label class="fld${f.wide?' wide':''}" data-f="${f.k}"><span>${f.l}${f.req?' *':''}</span>${inp}${f.hint?`<small>${f.hint}</small>`:''}</label>`;
 }
 function readForm(fields){const v={};for(const f of fields){const el=$('#dlg [name="'+f.k+'"]');let x=el?el.value:'';if(f.t==='num')x=num(x);else if(f.t==='date')x=normDate(x)||'';v[f.k]=x}return v}
-function openForm(key,id){
+function openForm(key,id,preset){
  if(!guardEdit())return;
  const E=ENT[key];const row=id?state[key].find(r=>r.id===id):null;
- const vals=row?{...row}:E.blank();
+ const vals=row?{...row}:E.blank(preset);
  const fields=E.fields(row);cur={key,id,row,fields};
- $('#dlg').innerHTML=`<div class="dh">${row?'ویرایش':'ثبت'} ${E.one}</div><div class="db">${fields.map(f=>fieldHTML(f,vals[f.k])).join('')}<div class="prev" id="prev" hidden></div><div class="err" id="err"></div></div><div class="df"><button class="btn pri" data-act="submit">ذخیره</button><button class="btn" data-act="cancel">انصراف</button></div>`;
+ $('#dlg').innerHTML=`<div class="dh">${row?'ویرایش':'ثبت'} ${E.one}</div><div class="db">${fields.map(f=>fieldHTML(f,vals[f.k],vals)).join('')}<div class="prev" id="prev" hidden></div><div class="err" id="err"></div></div><div class="df"><button class="btn pri" data-act="submit">ذخیره</button><button class="btn" data-act="cancel">انصراف</button></div>`;
  $('#dlg').showModal();refreshForm();
  const first=$('#dlg input,#dlg select');if(first)first.focus();
 }
 function refreshForm(){
- if(!cur)return;const{key,row,fields}=cur;const v=readForm(fields);
+ if(!cur)return;const{key,row,fields}=cur;
+ if(key==='sales'){
+  const bsel=$('#dlg [name="batchCode"]'),tsel=$('#dlg [name="typeId"]');
+  if(bsel&&tsel){const b=state.batches.find(x=>x.code===bsel.value);const opts=b?typesOf(b.productId):[];const sig=opts.map(o=>o.id).join('|');
+   if(tsel.dataset.sig!==sig){const want=tsel.value;tsel.innerHTML=opts.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');tsel.value=opts.some(t=>t.id===want)?want:(opts[0]?opts[0].id:'');tsel.dataset.sig=sig}}
+ }
+ const v=readForm(fields);
  for(const f of fields)if(f.showIf){const lab=$('#dlg [data-f="'+f.k+'"]');lab.hidden=!f.showIf(v)}
  if(key==='purchases'){
   const isCount=unitOf(v.materialId)==='count';
@@ -590,13 +870,13 @@ async function submitForm(){
  try{
   if(key==='sales'&&v.buyerId==='new'){const bid=await addDoc('buyers',{name:String(v.newName).trim(),phone:v.newPhone,note:v.newNote});v.buyerId=bid;logActivity('افزودن خریدار جدید: '+v.newName)}
   if(key==='sales'){delete v.newName;delete v.newPhone;delete v.newNote}
-  if(row){await setDoc(key,row.id,v);logActivity(`ویرایش ${E.one} ${row.code||''}`.trim())}
+  if(row){const base={...row};delete base.id;await setDoc(key,row.id,{...base,...v});logActivity(E.logText?('ویرایش: '+E.logText(v)):`ویرایش ${E.one} ${row.code||''}`.trim())}
   else{
    const extra={};
    if(key==='purchases')extra.code=await nextCode('P','p');
    if(key==='batches')extra.code=await nextCode('T','t');
    await addDoc(key,{...v,...extra});
-   logActivity(`ثبت ${E.one} ${extra.code||''}`.trim());
+   logActivity(E.logText?E.logText(v):`ثبت ${E.one} ${extra.code||''}`.trim());
   }
   $('#dlg').close();cur=null;toast('ذخیره شد');render();
  }catch(e){$('#err').textContent='ذخیره ناموفق بود: '+((e&&(e.code||e.message))||e);if(btn)btn.disabled=false}
@@ -605,6 +885,8 @@ async function del(key,id){
  if(!guardEdit())return;
  const r=state[key].find(x=>x.id===id);if(!r)return;
  if(key==='purchases'&&state.batches.some(b=>b.partCode===r.code))return toast('این پارت در تولید استفاده شده؛ اول بچ‌های مربوط را حذف کنید.');
+ if(key==='purchases'&&state.stockout.some(x=>x.partCode===r.code))return toast('برای این پارت «خروج از انبار» ثبت شده؛ اول آن را حذف کنید.');
+ if(key==='ledger'&&r.kind==='settle')return toast('این ردیف از تسویه ساخته شده؛ از جدول «تسویه‌های انجام‌شده» آن را لغو کنید.');
  if(key==='batches'&&state.sales.some(s=>s.batchCode===r.code))return toast('برای این بچ فروش ثبت شده؛ اول فروش‌ها را حذف کنید.');
  if(key==='buyers'&&state.sales.some(s=>s.buyerId===r.id))return toast('برای این خریدار فروش ثبت شده است.');
  if(!confirm('این مورد حذف شود؟'))return;
@@ -726,7 +1008,7 @@ async function initOnlineCommon(){
   if(!snap.exists)CAP.db.doc('app/settings').set(defaultSettings()).catch(()=>{});
   connError=null;render();
  },onSyncErr);
- ['purchases','batches','sales','buyers','members','roles'].forEach(subscribeCol);
+ ['purchases','batches','sales','buyers','members','roles','ledger','stockout'].forEach(subscribeCol);
  CAP.db.collection('activity').orderBy('ts','desc').limit(300).onSnapshot(snap=>{
   state.activity=snap.docs.map(d=>({id:d.id,...d.data()}));connError=null;render();
  },onSyncErr);
@@ -777,7 +1059,14 @@ document.addEventListener('click',e=>{
  else if(a==='del')del(key,t.dataset.id);
  else if(a==='submit')submitForm();
  else if(a==='cancel'){$('#dlg').close();cur=null}
- else if(a==='csv')exportCSV(key);
+ else if(a==='csv')exportTable(key);
+ else if(a==='clrf'){FLT[t.dataset.tid]={};render()}
+ else if(a==='whempty'){whEmpty=t.checked;render()}
+ else if(a==='addcap')openForm('ledger',null,{kind:'capital'});
+ else if(a==='addwd')openForm('ledger',null,{kind:'withdraw'});
+ else if(a==='opensettle')openSettleDialog();
+ else if(a==='dosettle')doSettle();
+ else if(a==='cancelsettle')cancelSettle(t.dataset.id);
  else if(a==='csvcost')exportCost();
  else if(a==='csvact')exportActivity();
  else if(a==='invoice')openInvoice(t.dataset.id);
@@ -815,6 +1104,20 @@ document.addEventListener('click',e=>{
  else if(a==='disconnectfb'){
   if(confirm('اتصال آنلاین قطع شود و به حالت آفلاین (فقط همین دستگاه) بازگردیم؟')){localStorage.removeItem('shaton-fb-config');location.reload()}
  }
+ else if(a==='addtype'){
+  if(!guardEdit())return;materializeTypes();const p=S().products[+t.dataset.pi];if(!p)return;
+  p.types.push({id:p.id+'-t'+Date.now().toString(36),name:'تیپ جدید',excl:[]});saveSettings().then(()=>toast('ذخیره شد'));
+ }
+ else if(a==='deltype'){
+  if(!guardEdit())return;materializeTypes();const p=S().products[+t.dataset.pi];const ty=p&&p.types[+t.dataset.ti];if(!ty)return;
+  if(state.sales.some(x=>x.typeId===ty.id))return toast('برای این تیپ فروش ثبت شده؛ قابل حذف نیست.');
+  if(!confirm('این تیپ حذف شود؟'))return;p.types.splice(+t.dataset.ti,1);saveSettings().then(()=>toast('حذف و ذخیره شد'));
+ }
+ else if(a==='toggleexcl'){
+  if(!guardEdit()){render();return}materializeTypes();const p=S().products[+t.dataset.pi];const ty=p&&p.types[+t.dataset.ti];if(!ty)return;
+  const k=t.dataset.k;ty.excl=(ty.excl||[]).filter(x=>x!==k);if(!t.checked)ty.excl.push(k);
+  saveSettings().then(()=>toast('ذخیره شد')).catch(err=>toast('ذخیره ناموفق: '+((err&&(err.code||err.message))||err)));
+ }
  else if(a==='addmat'){
   if(!guardEdit())return;
   if(state.settings.materials.length>=15)return;
@@ -836,11 +1139,20 @@ document.addEventListener('click',e=>{
   setDoc('roles',id,{level,tabs}).then(()=>{logActivity('تغییر سطح دسترسی '+nameOf(id)+' به '+({admin:'مدیر',full:'کامل',limited:'محدود'}[level]));toast('ذخیره شد')});
  }
 });
-document.addEventListener('input',e=>{if(e.target.closest('#dlg'))refreshForm()});
+document.addEventListener('input',e=>{
+ const fl=e.target.closest&&e.target.closest('.flt');
+ if(fl&&fl.tagName==='INPUT'){const id=fl.dataset.tid;FLT[id]=FLT[id]||{};FLT[id][fl.dataset.col]=fl.value;refreshTable(id);return}
+ if(e.target.id==='setdate'){updateSettlePreview();return}
+ if(e.target.closest('#dlg'))refreshForm();
+});
 document.addEventListener('change',e=>{
+ const fl=e.target.closest&&e.target.closest('.flt');
+ if(fl&&fl.tagName==='SELECT'){const id=fl.dataset.tid;FLT[id]=FLT[id]||{};FLT[id][fl.dataset.col]=fl.value;refreshTable(id);return}
  if(e.target.closest('#dlg')){refreshForm();return}
+ if(e.target.dataset&&e.target.dataset.act==='toggleexcl')return;
  const p=e.target.dataset&&e.target.dataset.path;if(!p)return;
  if(!guardEdit()){render();return}
+ if(p.startsWith('products.'))materializeTypes();
  const parts=p.split('.');let o=state.settings;for(let i=0;i<parts.length-1;i++)o=o[parts[i]];
  const last=parts[parts.length-1];const isText=parts[0]==='names'||(/name|materialId|address|phone|eco|bank|note|unit/.test(last)&&!/^count$/.test(last));
  o[last]=isText?e.target.value:num(e.target.value);
