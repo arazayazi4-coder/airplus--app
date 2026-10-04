@@ -210,7 +210,7 @@ function ensureIdentity(){
 
 function defaultSettings(){return{count:3,names:['','',''],
  materials:[{id:'m1',name:'شفت توپر ۷۰۰۰ - Ø45',od:45,idm:0,density:2.8,unit:'kg'},{id:'m2',name:'لوله ۶۰۰۰ - Ø60/Ø30',od:60,idm:30,density:2.7,unit:'kg'}],
- products:[{id:'p1',name:'شاتون',materialId:'m1',length:120,waste:3},{id:'p2',name:'سیلندر تیپ ۱',materialId:'m2',length:100,waste:3},{id:'p3',name:'سیلندر تیپ ۲',materialId:'m2',length:80,waste:3}],
+ products:[{id:'p1',name:'شاتون',materialId:'m1',length:120,waste:3,salePrice:0},{id:'p2',name:'سیلندر تیپ ۱',materialId:'m2',length:100,waste:3,salePrice:0},{id:'p3',name:'سیلندر تیپ ۲',materialId:'m2',length:80,waste:3,salePrice:0}],
  company:{name:'ایرپلاس پنوماتیک',address:'',phone:'',eco:'',bank:'',note:''}}}
 function defaultsState(){return{settings:defaultSettings(),purchases:[],batches:[],sales:[],buyers:[],activity:[],members:[],roles:{},ledger:[],stockout:[],counters:{p:0,t:0}}}
 let state=defaultsState();
@@ -287,6 +287,7 @@ function nameOf(id){
 /* ======== محاسبات کسب‌وکار ======== */
 const mat=id=>S().materials.find(m=>m.id===id)||S().materials[0];
 const unitOf=id=>{const m=mat(id);return(m&&m.unit==='count')?'count':'kg'};
+const saleValRow=(pid)=>{const p=prod(pid);return(p&&+p.salePrice)||0};
 const prod=id=>S().products.find(p=>p.id===id);
 const prodName=id=>(prod(id)||{}).name||'—';
 const unitWeight=p=>{const m=mat(p.materialId);return Math.PI/4*(m.od**2-m.idm**2)*p.length*m.density/1e6};
@@ -630,6 +631,7 @@ function listView(key){
 }
 function dashView(){
  const t=totals();
+ const mktVal=S().products.reduce((a,p)=>a+state.batches.filter(b=>b.productId===p.id).reduce((s2,b)=>s2+bCalc(b).stock,0)*saleValRow(p.id),0);
  let banner='';
  if(importOffer)banner=`<div class="alert info">داده‌های ذخیره‌شده از نسخه قبلی روی همین مرورگر پیدا شد (${fa.format(importOffer.purchases.length)} خرید، ${fa.format((importOffer.sales||[]).length)} فروش). می‌خواهید به نسخه آنلاین منتقل شوند؟
   <button class="btn sm pri" data-act="doimport">وارد کردن</button> <button class="btn sm" data-act="skipimport">نادیده گرفتن</button></div>`;
@@ -638,7 +640,7 @@ function dashView(){
  const names=Array.from({length:n},(_,i)=>S().names[i]||`سهامدار ${faDigits(i+1)}`);
  const L=(l,v,c)=>`<div class="${c||''}"><span>${l}</span><b class="${v<0?'neg':''}">${fa.format(Math.round(v))}</b></div>`;
  let h=`<h1>داشبورد</h1><p class="sub">همه اعداد به تومان و از ثبت‌های شما محاسبه می‌شوند.</p>${banner}<div class="split"><div>
- <div class="ledger">${L('آورده سهامداران',t.capital)}${L('کل فروش',t.sales)}${L('هزینه تأمین متریال و اقلام (خرید + حمل)',-t.purch)}${L('هزینه نقدی ماشینکاری و فرآوری',-t.procCash)}${L('برداشت و تسویه سهامداران',-t.withdrawn)}${L('موجودی کلی صندوق (نقد)',t.cash,'key')}${L('ارزش موجودی انبار (محصولات ساخته‌شده)',t.stockVal)}${L('ارزش مواد و اقلام باقی‌مانده در انبار',t.rawVal)}${L('سود فروش',t.profit,'key big')}</div>
+ <div class="ledger">${L('آورده سهامداران',t.capital)}${L('کل فروش',t.sales)}${L('هزینه تأمین متریال و اقلام (خرید + حمل)',-t.purch)}${L('هزینه نقدی ماشینکاری و فرآوری',-t.procCash)}${L('برداشت و تسویه سهامداران',-t.withdrawn)}${L('موجودی کلی صندوق (نقد)',t.cash,'key')}${L('ارزش موجودی انبار (محصولات ساخته‌شده، به بهای تمام‌شده)',t.stockVal)}${L('ارزش همان موجودی به قیمت فروش روز',mktVal,'key')}${L('ارزش مواد و اقلام باقی‌مانده در انبار',t.rawVal)}${L('سود فروش',t.profit,'key big')}</div>
  <div class="sect">سهم هر سهامدار (مساوی)</div><div class="shares">${names.map(nm=>`<div class="share"><span>${esc(nm)}</span><b class="${share<0?'neg':''}">${fa.format(Math.round(share))}</b></div>`).join('')}</div></div>`;
  const P=S().products.map(p=>{const bs=state.batches.filter(b=>b.productId===p.id);const bc=bs.map(b=>({b,c:bCalc(b)}));const ss=state.sales.map(s=>({s,c:sCalc(s)})).filter(x=>x.c.b&&x.c.b.productId===p.id);return{p,made:bs.reduce((a,b)=>a+b.qty,0),sold:ss.reduce((a,x)=>a+x.s.qty,0),rev:ss.reduce((a,x)=>a+x.c.total,0),cogs:ss.reduce((a,x)=>a+x.c.cogs,0),profit:ss.reduce((a,x)=>a+x.c.profit,0),cost:bc.reduce((a,x)=>a+x.c.total,0)}});
  const mx=Math.max(1,...P.map(x=>Math.max(x.rev,x.cogs,Math.abs(x.profit))));
@@ -667,7 +669,7 @@ function settingsView(){
  let h=`<h1>تنظیمات</h1><p class="sub">تغییرها همان لحظه ذخیره می‌شوند و به همه محاسبات اثر می‌گذارند.</p>
  <div class="sset"><b>سهامداران</b><p class="mut" style="margin:4px 0 10px">سود فروش بین این تعداد نفر به‌صورت مساوی تقسیم می‌شود.</p><table><tr><td>تعداد</td><td>${inp('count',s.count)}</td></tr>${[0,1,2].map(i=>`<tr><td>نام سهامدار ${faDigits(i+1)}</td><td>${inpT('names.'+i,s.names[i])}</td></tr>`).join('')}</table></div>
  <div class="sset"><b>متریال‌های ورودی</b><p class="mut" style="margin:4px 0 10px">تا ۱۵ نوع متریال/کالای خریداری‌شده می‌توانید اضافه کنید. برای اقلامی مثل بلبرینگ، پیچ، ورق، پکینگ، واشر و... واحد را «عدد» بگذارید تا در فرم خرید به‌جای کیلوگرم، تعداد و قیمت هر عدد بپرسد؛ قطر و چگالی برای این‌ها اهمیتی ندارد.</p><table><thead><tr><th>نام</th><th>واحد</th><th>قطر بیرونی (mm)</th><th>قطر داخلی (mm)</th><th>چگالی (g/cm³)</th><th></th></tr></thead>${s.materials.map((m,i)=>`<tr><td>${inpT(`materials.${i}.name`,m.name)}</td><td><select data-path="materials.${i}.unit"><option value="kg"${m.unit!=='count'?' selected':''}>کیلوگرم</option><option value="count"${m.unit==='count'?' selected':''}>عدد</option></select></td><td>${inp(`materials.${i}.od`,m.od)}</td><td>${inp(`materials.${i}.idm`,m.idm)}</td><td>${inp(`materials.${i}.density`,m.density)}</td><td>${canEditData()&&s.materials.length>1?`<button class="btn sm del" data-act="delmat" data-idx="${i}">حذف</button>`:''}</td></tr>`).join('')}</table>${canEditData()&&s.materials.length<15?`<div style="margin-top:8px"><button class="btn sm" data-act="addmat">＋ افزودن نوع متریال</button></div>`:''}</div>
- <div class="sset"><b>محصولات</b><p class="mut" style="margin:4px 0 10px">طول برش و درصد ضایعات فقط برای محاسبه وزن مصرفی است.</p><table><thead><tr><th>نام</th><th>متریال</th><th>طول برش هر قطعه (mm)</th><th>ضایعات (٪)</th><th>وزن هر قطعه با ضایعات (kg)</th></tr></thead>${s.products.map((p,i)=>`<tr><td>${inpT(`products.${i}.name`,p.name)}</td><td><select data-path="products.${i}.materialId">${s.materials.map(m=>`<option value="${m.id}"${m.id===p.materialId?' selected':''}>${esc(m.name)}</option>`).join('')}</select></td><td>${inp(`products.${i}.length`,p.length)}</td><td>${inp(`products.${i}.waste`,p.waste)}</td><td>${fa2.format(unitWeight(p)*(1+p.waste/100))}</td></tr>`).join('')}</table></div>
+ <div class="sset"><b>محصولات</b><p class="mut" style="margin:4px 0 10px">طول برش و درصد ضایعات فقط برای محاسبه وزن مصرفی است. «قیمت فروش فعلی» فقط برای محاسبه‌ی ارزش انبار به قیمت روز است (با تورم/بازار می‌توانید هر وقت خواستید عوضش کنید)؛ روی سود فروش‌های ثبت‌شده اثر ندارد.</p><table><thead><tr><th>نام</th><th>متریال</th><th>طول برش هر قطعه (mm)</th><th>ضایعات (٪)</th><th>وزن هر قطعه با ضایعات (kg)</th><th>قیمت فروش فعلی (تومان)</th></tr></thead>${s.products.map((p,i)=>`<tr><td>${inpT(`products.${i}.name`,p.name)}</td><td><select data-path="products.${i}.materialId">${s.materials.map(m=>`<option value="${m.id}"${m.id===p.materialId?' selected':''}>${esc(m.name)}</option>`).join('')}</select></td><td>${inp(`products.${i}.length`,p.length)}</td><td>${inp(`products.${i}.waste`,p.waste)}</td><td>${fa2.format(unitWeight(p)*(1+p.waste/100))}</td><td>${inp(`products.${i}.salePrice`,p.salePrice||0)}</td></tr>`).join('')}</table></div>
  ${typesEditor()}
  <div class="sset"><b>اطلاعات فاکتور و سربرگ</b><p class="mut" style="margin:4px 0 10px">در فاکتور چاپی نمایش داده می‌شود.</p><table>
  <tr><td>نام شرکت</td><td>${inpT('company.name',s.company.name)}</td></tr>
@@ -817,11 +819,15 @@ function warehouseView(){
  h+=tableHTML('wh_fin',{cols:[
   {h:'کد بچ',v:r=>r.code},{h:'تاریخ',v:r=>r.date,k:'date'},{h:'محصول',v:r=>prodName(r.productId)},
   {h:'تعداد تولید',v:r=>r.qty,k:'int',n:1},{h:'ضایعات',v:(r,c)=>c.scrap,k:'int',n:1},{h:'فروخته',v:(r,c)=>c.sold,k:'int',n:1},
-  {h:'موجودی',v:(r,c)=>c.stock,k:'int',n:1},{h:'بهای هر قطعه سالم',v:(r,c)=>c.unit,k:'money',n:1},{h:'ارزش موجودی',v:(r,c)=>c.stockVal,k:'money',n:1}],
+  {h:'موجودی',v:(r,c)=>c.stock,k:'int',n:1},{h:'بهای هر قطعه سالم',v:(r,c)=>c.unit,k:'money',n:1},{h:'ارزش به بهای تمام‌شده',v:(r,c)=>c.stockVal,k:'money',n:1},
+  {h:'قیمت فروش فعلی هر قطعه',v:r=>saleValRow(r.productId),k:'money',n:1},{h:'ارزش به قیمت فروش روز',v:(r,c)=>c.stock*saleValRow(r.productId),k:'money',n:1}],
   rows:()=>state.batches.map(b=>({r:b,c:bCalc(b)})).filter(x=>x.c.stock>0).sort((a,b)=>(b.r.date||'').localeCompare(a.r.date||'')),
-  foot:(rows)=>({6:rows.reduce((a,x)=>a+x.c.stock,0),8:rows.reduce((a,x)=>a+x.c.stockVal,0)}),footKinds:{6:'int',8:'money'},emptyMsg:'محصول فروخته‌نشده‌ای در انبار نیست.',actions:null});
- const psum=S().products.map(p=>{const bs=state.batches.filter(b=>b.productId===p.id).map(b=>bCalc(b));const usable=bs.reduce((a,c)=>a+c.usable,0),sold=bs.reduce((a,c)=>a+c.sold,0),stock=bs.reduce((a,c)=>a+c.stock,0),val=bs.reduce((a,c)=>a+c.stockVal,0);return`<tr><td>${esc(p.name)}</td><td class="n">${fmt('int',usable)}</td><td class="n">${fmt('int',sold)}</td><td class="n"><b>${fmt('int',stock)}</b></td><td class="n">${fmt('money',val)}</td></tr>`}).join('');
- h+=`<div class="sect">خلاصه‌ی موجودی هر محصول</div><div class="wrap"><table><thead><tr><th>محصول</th><th class="n">قابل فروش (پس از ضایعات)</th><th class="n">فروخته</th><th class="n">موجودی</th><th class="n">ارزش موجودی</th></tr></thead><tbody>${psum}</tbody></table></div>`;
+  foot:(rows)=>({6:rows.reduce((a,x)=>a+x.c.stock,0),8:rows.reduce((a,x)=>a+x.c.stockVal,0),10:rows.reduce((a,x)=>a+x.c.stock*saleValRow(x.r.productId),0)}),footKinds:{6:'int',8:'money',10:'money'},emptyMsg:'محصول فروخته‌نشده‌ای در انبار نیست.',actions:null});
+ const psum0=S().products.map(p=>{const bs=state.batches.filter(b=>b.productId===p.id).map(b=>bCalc(b));const usable=bs.reduce((a,c)=>a+c.usable,0),sold=bs.reduce((a,c)=>a+c.sold,0),stock=bs.reduce((a,c)=>a+c.stock,0),val=bs.reduce((a,c)=>a+c.stockVal,0);const mval=stock*saleValRow(p.id);return{p,usable,sold,stock,val,mval}});
+ const psum=psum0.map(x=>`<tr><td>${esc(x.p.name)}</td><td class="n">${fmt('int',x.usable)}</td><td class="n">${fmt('int',x.sold)}</td><td class="n"><b>${fmt('int',x.stock)}</b></td><td class="n">${fmt('money',x.val)}</td><td class="n">${x.p.salePrice?fmt('money',x.p.salePrice):'—'}</td><td class="n"><b>${fmt('money',x.mval)}</b></td></tr>`).join('');
+ const mvalTotal=psum0.reduce((a,x)=>a+x.mval,0);
+ h+=`<div class="sect">خلاصه‌ی موجودی هر محصول</div><div class="wrap"><table><thead><tr><th>محصول</th><th class="n">قابل فروش (پس از ضایعات)</th><th class="n">فروخته</th><th class="n">موجودی</th><th class="n">ارزش به بهای تمام‌شده</th><th class="n">قیمت فروش فعلی</th><th class="n">ارزش به قیمت فروش روز</th></tr></thead><tbody>${psum}</tbody><tfoot><tr><td colspan="6">جمع ارزش انبار به قیمت فروش روز</td><td class="n"><b>${fa.format(Math.round(mvalTotal))}</b></td></tr></tfoot></table></div>
+ <p class="mut" style="font-size:12px;margin:6px 2px 0">قیمت فروش فعلی هر محصول را از تب «تنظیمات» (پایین جدول محصولات) هر وقت خواستید عوض کنید؛ روی سود فروش‌های قبلی اثری ندارد، فقط ارزش‌گذاری انبار را به‌روز نگه می‌دارد.</p>`;
  h+=`<div class="bar" style="margin-top:22px"><div><b>خروج/مصرف دستی از انبار</b><p class="mut" style="margin:2px 0 0;font-size:12px">مثلاً بلبرینگ و پیچی که در تولید مصرف شده یا ضایعات ورق را اینجا ثبت کنید تا از موجودی کم شود.</p></div><button class="btn sm" data-act="csv" data-key="stockout">خروجی CSV</button></div>`+entTable('stockout',{emptyMsg:'هنوز خروجی ثبت نشده است.'});
  return h;
 }
