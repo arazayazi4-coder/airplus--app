@@ -633,8 +633,8 @@ function dashView(){
  const t=totals();
  const mktVal=S().products.reduce((a,p)=>a+state.batches.filter(b=>b.productId===p.id).reduce((s2,b)=>s2+bCalc(b).stock,0)*saleValRow(p.id),0);
  let banner='';
- if(importOffer)banner=`<div class="alert info">داده‌های ذخیره‌شده از نسخه قبلی روی همین مرورگر پیدا شد (${fa.format(importOffer.purchases.length)} خرید، ${fa.format((importOffer.sales||[]).length)} فروش). می‌خواهید به نسخه آنلاین منتقل شوند؟
-  <button class="btn sm pri" data-act="doimport">وارد کردن</button> <button class="btn sm" data-act="skipimport">نادیده گرفتن</button></div>`;
+ if(importOffer){const io=importOffer;const bits=[];const pc=(io.purchases||[]).length,sc=(io.sales||[]).length;if(pc)bits.push(fa.format(pc)+' خرید');if(sc)bits.push(fa.format(sc)+' فروش');if(hasNames(io.settings))bits.push('نام سهامداران و تنظیمات');banner=`<div class="alert info">داده‌های ذخیره‌شده روی همین مرورگر پیدا شد (${bits.join('، ')||'تنظیمات'}) که در نسخه‌ی آنلاین نیست. می‌خواهید وارد شوند؟
+  <button class="btn sm pri" data-act="doimport">وارد کردن</button> <button class="btn sm" data-act="skipimport">نادیده گرفتن</button></div>`}
  if(!state.purchases.length&&!state.batches.length&&!state.sales.length)return`<h1>داشبورد</h1><p class="sub">خلاصه مالی و وضعیت انبار</p>${banner}<div class="wrap"><div class="empty"><p>هنوز داده‌ای ثبت نشده است. ترتیب کار:<br>۱) در «تنظیمات» طول برش قطعات را درست کنید · ۲) خرید متریال · ۳) تولید · ۴) فروش</p></div></div>`;
  const n=Math.max(1,num(S().count));const share=t.profit/n;
  const names=Array.from({length:n},(_,i)=>S().names[i]||`سهامدار ${faDigits(i+1)}`);
@@ -925,13 +925,25 @@ async function doImport(){
   const buyerMap={};
   for(const b of(legacy.buyers||[])){const nid=await addDoc('buyers',{name:b.name,phone:b.phone,note:b.note});buyerMap[b.id]=nid}
   for(const s of(legacy.sales||[]))await addDoc('sales',{...s,id:undefined,buyerId:buyerMap[s.buyerId]||s.buyerId});
-  logActivity('درون‌ریزی داده‌های نسخه قبلی این دستگاه');toast('داده‌های قبلی وارد شد');render();
+  for(const l of(legacy.ledger||[]))await addDoc('ledger',{...l,id:undefined});
+  for(const o of(legacy.stockout||[]))await addDoc('stockout',{...o,id:undefined});
+  logActivity('درون‌ریزی داده‌های ذخیره‌شده‌ی این دستگاه');toast('داده‌ها وارد شد');render();
  }catch(e){toast('درون‌ریزی با خطا مواجه شد')}
 }
+const hasNames=s=>s&&s.names&&s.names.some(n=>n&&String(n).trim());
 function checkImportOffer(){
  if(!isOnline()||importOffer)return;
- if(state.purchases.length||state.batches.length||state.sales.length)return;
- try{const legacy=JSON.parse(localStorage.getItem(LEGACY_KEY)||'null');if(legacy&&legacy.purchases&&legacy.purchases.length){importOffer=legacy;render()}}catch(e){}
+ let cand=null;
+ try{cand=JSON.parse(localStorage.getItem(LOCAL_KEY)||'null')}catch(e){}
+ if(!cand){try{cand=JSON.parse(localStorage.getItem(LEGACY_KEY)||'null')}catch(e){}}
+ if(!cand)return;
+ const hasData=(cand.purchases&&cand.purchases.length)||(cand.batches&&cand.batches.length)||(cand.sales&&cand.sales.length);
+ const candHasNames=hasNames(cand.settings);
+ if(!hasData&&!candHasNames)return;
+ const cloudLooksEmpty=!state.purchases.length&&!state.batches.length&&!state.sales.length;
+ const cloudNamesBlank=!hasNames(state.settings);
+ if(!(cloudLooksEmpty&&hasData)&&!(cloudNamesBlank&&candHasNames))return;
+ importOffer=cand;render();
 }
 
 /* ======== اتصال آنلاین (Firebase) و هویت کاربر ======== */
@@ -1010,8 +1022,8 @@ function subscribeCol(name){
 }
 async function initOnlineCommon(){
  CAP.db.doc('app/settings').onSnapshot(snap=>{
-  state.settings=snap.exists?deepMerge(defaultSettings(),snap.data()):defaultSettings();
-  if(!snap.exists)CAP.db.doc('app/settings').set(defaultSettings()).catch(()=>{});
+  if(snap.exists){state.settings=deepMerge(defaultSettings(),snap.data())}
+  else{const seed=deepMerge(defaultSettings(),state.settings||{});state.settings=seed;CAP.db.doc('app/settings').set(seed).catch(()=>{})}
   connError=null;render();
  },onSyncErr);
  ['purchases','batches','sales','buyers','members','roles','ledger','stockout'].forEach(subscribeCol);
@@ -1030,7 +1042,7 @@ async function boot(){
    const cfg=safeParseConfig(fbRaw);
    fbProjectId=cfg.projectId||'';
    CAP.db=await fbInit(cfg);CAP.user=null;CAP.downloads=null;
-   MODE='firebase';state=defaultsState();
+   MODE='firebase';
    await initOnlineCommon();
    if(!CUR.name)openNameDialog(true);
    return;
@@ -1043,7 +1055,7 @@ async function boot(){
     CAP.db=db;
     try{CAP.user=await window.claude.use('user')}catch(e){CAP.user=null}
     try{CAP.downloads=await window.claude.use('downloads')}catch(e){CAP.downloads=null}
-    MODE='claude';state=defaultsState();
+    MODE='claude';
     const me=CAP.user?await CAP.user.me():{id:CUR.id,name:CUR.name,isOwner:true,canEdit:true};
     CUR={id:me.id||CUR.id,name:me.name||CUR.name,isOwner:me.isOwner,canEdit:me.canEdit};
     await initOnlineCommon();
