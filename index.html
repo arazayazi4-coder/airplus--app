@@ -145,7 +145,7 @@ th .flt{display:block;width:100%;min-width:64px;margin-top:5px;padding:3px 6px;f
 <body>
 <div class="app">
  <aside>
-  <div class="brand"><div><b>حساب تولید</b><span>شاتون و سیلندر کمپرسور باد</span></div><button id="menuBtn" class="menubtn">☰</button></div>
+  <div class="brand"><div><b>حساب تولید</b><span>شاتون و سیلندر کمپرسور باد</span><span style="display:block;font-size:10px;color:#5C93E6;margin-top:2px">نسخه ۱۴۰۵/۰۷/۱۲-۱</span></div><button id="menuBtn" class="menubtn">☰</button></div>
   <div class="who" id="who"></div>
   <nav id="nav"></nav>
   <div class="tools" id="tools"></div>
@@ -586,11 +586,31 @@ const ENT={
 /* ======== نمایش ======== */
 let tab=sessionStorage.getItem('tab')||'dash';
 const TABS=[['dash','داشبورد'],['purchases','خرید متریال'],['batches','تولید'],['sales','فروش'],['buyers','خریداران'],['warehouse','انبار'],['partners','صندوق و سهامداران'],['invoice','فاکتور'],['cost','بهای تمام‌شده'],['activity','لاگ تغییرات'],['settings','تنظیمات'],['access','دسترسی‌ها']];
+function applySettingsField(el){
+ const p=el.dataset.path;if(!p)return;
+ if(p.startsWith('products.'))materializeTypes();
+ const parts=p.split('.');let o=state.settings;for(let i=0;i<parts.length-1;i++)o=o[parts[i]];
+ const last=parts[parts.length-1];const isText=parts[0]==='names'||(/name|materialId|address|phone|eco|bank|note|unit/.test(last)&&!/^count$/.test(last));
+ o[last]=isText?el.value:num(el.value);
+}
+let settingsSaveTimer=null;
+function queueSettingsSave(){
+ clearTimeout(settingsSaveTimer);
+ settingsSaveTimer=setTimeout(()=>{saveSettings().then(()=>toast('ذخیره شد')).catch(err=>toast('ذخیره ناموفق: '+((err&&(err.code||err.message))||err)))},600);
+}
 function render(){
  const ae=document.activeElement;let keep=null;
- if(ae&&ae.classList&&ae.classList.contains('flt')&&ae.tagName==='INPUT')keep={tid:ae.dataset.tid,col:ae.dataset.col,p:ae.selectionStart};
+ if(ae&&ae.classList&&ae.classList.contains('flt')&&ae.tagName==='INPUT'){
+  keep={type:'flt',tid:ae.dataset.tid,col:ae.dataset.col,p:ae.selectionStart};
+ }else if(ae&&ae.dataset&&ae.dataset.path&&(ae.tagName==='INPUT'||ae.tagName==='SELECT')){
+  applySettingsField(ae);
+  keep={type:'path',path:ae.dataset.path,p:ae.selectionStart,sel:ae.tagName==='SELECT'};
+ }
  renderInner();
- if(keep){const el=document.querySelector('.flt[data-tid="'+keep.tid+'"][data-col="'+keep.col+'"]');if(el){el.focus();try{el.setSelectionRange(keep.p,keep.p)}catch(e){}}}
+ if(keep){
+  const el=keep.type==='flt'?document.querySelector('.flt[data-tid="'+keep.tid+'"][data-col="'+keep.col+'"]'):document.querySelector('[data-path="'+keep.path+'"]');
+  if(el){el.focus();if(!keep.sel){try{el.setSelectionRange(keep.p,keep.p)}catch(e){}}}
+ }
 }
 function renderInner(){
  const visible=TABS.filter(([k])=>canSeeTab(k));
@@ -1161,6 +1181,10 @@ document.addEventListener('input',e=>{
  const fl=e.target.closest&&e.target.closest('.flt');
  if(fl&&fl.tagName==='INPUT'){const id=fl.dataset.tid;FLT[id]=FLT[id]||{};FLT[id][fl.dataset.col]=fl.value;refreshTable(id);return}
  if(e.target.id==='setdate'){updateSettlePreview();return}
+ if(e.target.dataset&&e.target.dataset.path){
+  if(!guardEdit())return;
+  applySettingsField(e.target);queueSettingsSave();render();return;
+ }
  if(e.target.closest('#dlg'))refreshForm();
 });
 document.addEventListener('change',e=>{
@@ -1168,13 +1192,12 @@ document.addEventListener('change',e=>{
  if(fl&&fl.tagName==='SELECT'){const id=fl.dataset.tid;FLT[id]=FLT[id]||{};FLT[id][fl.dataset.col]=fl.value;refreshTable(id);return}
  if(e.target.closest('#dlg')){refreshForm();return}
  if(e.target.dataset&&e.target.dataset.act==='toggleexcl')return;
- const p=e.target.dataset&&e.target.dataset.path;if(!p)return;
+ if(!(e.target.dataset&&e.target.dataset.path))return;
  if(!guardEdit()){render();return}
- if(p.startsWith('products.'))materializeTypes();
- const parts=p.split('.');let o=state.settings;for(let i=0;i<parts.length-1;i++)o=o[parts[i]];
- const last=parts[parts.length-1];const isText=parts[0]==='names'||(/name|materialId|address|phone|eco|bank|note|unit/.test(last)&&!/^count$/.test(last));
- o[last]=isText?e.target.value:num(e.target.value);
+ applySettingsField(e.target);
+ clearTimeout(settingsSaveTimer);
  saveSettings().then(()=>toast('ذخیره شد')).catch(err=>toast('ذخیره ناموفق: '+((err&&(err.code||err.message))||err)));
+ render();
 });
 $('#dlg').addEventListener('cancel',()=>{cur=null});
 $('#file').addEventListener('change',e=>{
