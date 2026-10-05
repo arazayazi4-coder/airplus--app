@@ -145,7 +145,7 @@ th .flt{display:block;width:100%;min-width:64px;margin-top:5px;padding:3px 6px;f
 <body>
 <div class="app">
  <aside>
-  <div class="brand"><div><b>حساب تولید</b><span>شاتون و سیلندر کمپرسور باد</span><span style="display:block;font-size:10px;color:#5C93E6;margin-top:2px">نسخه ۱۴۰۵/۰۷/۱۲-۱</span></div><button id="menuBtn" class="menubtn">☰</button></div>
+  <div class="brand"><div><b>حساب تولید</b><span>شاتون و سیلندر کمپرسور باد</span><span style="display:block;font-size:10px;color:#5C93E6;margin-top:2px">نسخه ۱۴۰۵/۰۷/۱۲-۲</span></div><button id="menuBtn" class="menubtn">☰</button></div>
   <div class="who" id="who"></div>
   <nav id="nav"></nav>
   <div class="tools" id="tools"></div>
@@ -285,7 +285,17 @@ function nameOf(id){
 }
 
 /* ======== محاسبات کسب‌وکار ======== */
-const mat=id=>S().materials.find(m=>m.id===id)||S().materials[0];
+const UNKNOWN_MAT={id:'',name:'⚠️ متریال نامشخص',od:0,idm:0,density:0,unit:'kg'};
+const mat=id=>S().materials.find(m=>m.id===id)||UNKNOWN_MAT;
+function orphanedMaterialIds(){
+ const known=new Set(S().materials.map(m=>m.id));const o={};
+ for(const p of state.purchases){if(p.materialId&&!known.has(p.materialId)){if(!o[p.materialId])o[p.materialId]={n:0,sample:p};o[p.materialId].n++}}
+ return o;
+}
+async function recoverMaterial(id,name,unit){
+ state.settings.materials.push({id,name,od:0,idm:0,density:unit==='count'?0:2.7,unit});
+ await saveSettings();logActivity('بازیابی متریال گمشده: '+name);
+}
 const unitOf=id=>{const m=mat(id);return(m&&m.unit==='count')?'count':'kg'};
 const saleValRow=(pid)=>{const p=prod(pid);return(p&&+p.salePrice)||0};
 const prod=id=>S().products.find(p=>p.id===id);
@@ -647,6 +657,10 @@ function listView(key){
  const E=ENT[key];const editable=canEditData();
  let h=`<div class="bar"><div><h1>${E.title}</h1><p class="sub" style="margin:0">${E.hint}</p></div><div><button class="btn" data-act="csv" data-key="${key}">خروجی اکسل (CSV)</button> ${editable?`<button class="btn pri" data-act="add" data-key="${key}">＋ ثبت ${E.one}</button>`:''}</div></div>`;
  if(key==='purchases'){const neg=state.purchases.filter(p=>p.kg-usedKg(p.code)<-0.005);if(neg.length)h+=`<div class="alert">مصرف بچ‌ها از مقدار خرید بیشتر شده: ${neg.map(p=>p.code).join('، ')}. وزن یا تعداد بچ‌ها را بررسی کنید.</div>`}
+ if(key==='purchases'&&canEditData()){
+  const orph=orphanedMaterialIds();const ids=Object.keys(orph);
+  if(ids.length)h+=`<div class="alert">${fa.format(ids.length)} نوع متریال در خریدهای ثبت‌شده پیدا شد که دیگر در تنظیمات تعریف نشده (احتمالاً به‌خاطر باگ قبلی پاک شده بود) — تا وقتی بازیابی نکنید، به‌جای نام درست «⚠️ متریال نامشخص» نشان داده می‌شود (نه نام اشتباه دیگری).<br>${ids.map(id=>{const o=orph[id];return`<div style="margin-top:8px;padding-top:8px;border-top:1px solid #E9CE8B">نمونه: ${fa.format(o.n)} خرید، اولی در ${faDigits(o.sample.date)} از «${esc(o.sample.supplier||'—')}» به قیمت ${fa.format(o.sample.price)}<br><input id="rcv-${id}" placeholder="نام درست این متریال (مثلاً بلبرینگ)" style="width:220px;display:inline-block;margin-top:4px"> <select id="rcvu-${id}"><option value="kg">کیلوگرم</option><option value="count">عدد</option></select> <button class="btn sm pri" data-act="recovermat" data-id="${id}">بازیابی با همین نام</button></div>`}).join('')}</div>`;
+ }
  return h+filterHelp()+entTable(key);
 }
 function dashView(){
@@ -1155,6 +1169,12 @@ document.addEventListener('click',e=>{
   if(!guardEdit()){render();return}materializeTypes();const p=S().products[+t.dataset.pi];const ty=p&&p.types[+t.dataset.ti];if(!ty)return;
   const k=t.dataset.k;ty.excl=(ty.excl||[]).filter(x=>x!==k);if(!t.checked)ty.excl.push(k);
   saveSettings().then(()=>toast('ذخیره شد')).catch(err=>toast('ذخیره ناموفق: '+((err&&(err.code||err.message))||err)));
+ }
+ else if(a==='recovermat'){
+  if(!guardEdit())return;
+  const id=t.dataset.id;const nameInp=document.getElementById('rcv-'+id),unitSel=document.getElementById('rcvu-'+id);
+  const name=((nameInp&&nameInp.value)||'').trim();if(!name){toast('نام را وارد کنید.');return}
+  recoverMaterial(id,name,unitSel?unitSel.value:'kg').then(()=>{toast('بازیابی شد');render()});
  }
  else if(a==='addmat'){
   if(!guardEdit())return;
